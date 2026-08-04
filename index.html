@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>karamba3d — parametric structural analysis (web replica)</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+</head>
+<body>
+
+<header id="titlebar">
+  <div id="brand"><span id="brand-badge">karamba3d</span><span id="brand-sub">parametric engineering — web replica</span></div>
+  <div id="menubar"></div>
+  <div id="title-doc">Grasshopper — definition.gh*</div>
+</header>
+
+<div id="ribbon">
+  <div id="ribbon-tabs"></div>
+  <div id="ribbon-groups"></div>
+</div>
+
+<main id="workspace">
+  <section id="gh-pane">
+    <canvas id="gh-canvas"></canvas>
+    <div id="search-popup">
+      <input id="search-input" type="text" placeholder="Enter a search keyword" autocomplete="off">
+      <div id="search-list"></div>
+    </div>
+    <div id="gh-hint">double-click canvas to add components · drag ports to wire · RMB-drag to pan · wheel to zoom</div>
+  </section>
+
+  <div id="splitter"></div>
+
+  <section id="viewport-pane">
+    <div id="viewport-container"></div>
+    <div id="viewport-title">Perspective ▾</div>
+    <div id="viewport-mode">Shaded</div>
+    <button id="btn-zoom-ext" title="Zoom Extents">⛶</button>
+    <div id="legend"></div>
+  </section>
+</main>
+
+<footer id="statusbar">
+  <span id="status-karamba">Karamba3D ▸ Analyze Th.I</span>
+  <span id="status-text"></span>
+</footer>
+
+<input type="file" id="file-input" accept=".obj,.dxf,.json" hidden>
+<input type="file" id="def-input" accept=".ghjson,.json" hidden>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

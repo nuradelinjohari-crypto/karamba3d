@@ -1,0 +1,330 @@
+/* karamba3d web replica — Grasshopper + Rhino chrome */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
+  font-size: 12px;
+  background: #2b2b2e;
+  user-select: none;
+}
+
+body { display: flex; flex-direction: column; }
+
+/* ---------------- title bar ---------------- */
+
+#titlebar {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  background: linear-gradient(#3a3a3e, #2e2e32);
+  border-bottom: 1px solid #1c1c1e;
+  padding: 0 10px;
+  gap: 14px;
+}
+
+#brand { display: flex; align-items: baseline; gap: 8px; }
+
+#brand-badge {
+  background: #d0021b;                 /* karamba red */
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 2px 9px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+}
+
+#brand-sub { color: #8f949a; font-size: 10px; }
+
+#menubar { display: flex; gap: 2px; }
+
+.menu {
+  position: relative;
+  color: #d6d8da;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: default;
+}
+.menu:hover { background: #4a4a50; }
+
+.menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 230px;
+  background: #f4f4f6;
+  border: 1px solid #9a9aa0;
+  box-shadow: 3px 4px 10px rgba(0,0,0,0.4);
+  z-index: 100;
+  padding: 3px 0;
+}
+.menu-dropdown hr { border: none; border-top: 1px solid #d5d5da; margin: 3px 6px; }
+.menu-item { padding: 5px 14px; color: #222; white-space: nowrap; }
+.menu-item:hover { background: #3875d7; color: #fff; }
+
+#title-doc { margin-left: auto; color: #8f949a; font-size: 11px; }
+
+/* ---------------- ribbon ---------------- */
+
+#ribbon { background: #d4d0c8; border-bottom: 1px solid #8a877e; }
+
+#ribbon-tabs {
+  display: flex;
+  gap: 1px;
+  padding: 4px 8px 0;
+  background: #c8c4bc;
+}
+
+.ribbon-tab {
+  padding: 3px 12px 4px;
+  background: #bdb9b1;
+  border: 1px solid #8a877e;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: #3c3a35;
+  cursor: default;
+  font-size: 11.5px;
+}
+.ribbon-tab:hover { background: #d9d5cd; }
+.ribbon-tab.active {
+  background: #ece9e2;
+  font-weight: 600;
+  position: relative;
+  top: 1px;
+}
+
+#ribbon-groups {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  background: #ece9e2;
+  padding: 5px 8px 2px;
+  min-height: 64px;
+  overflow-x: auto;
+}
+
+.ribbon-group {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #c9c5bc;
+  padding-right: 6px;
+}
+
+.ribbon-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-height: 44px;
+  align-content: flex-start;
+  flex: 1;
+}
+
+.ribbon-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 46px;
+  padding: 2px 1px;
+  border-radius: 3px;
+  color: #35332e;
+  font-size: 8.5px;
+  cursor: default;
+  text-align: center;
+  line-height: 1.15;
+}
+.ribbon-item:hover { background: #d8e4f2; outline: 1px solid #9db8d6; }
+.ri-icon { font-size: 15px; line-height: 17px; }
+
+.ribbon-group-label {
+  font-size: 9px;
+  color: #6b675e;
+  text-align: center;
+  padding: 1px 4px;
+  border-top: 1px solid #d6d2c9;
+  margin-top: 2px;
+  cursor: default;
+}
+.ribbon-group-label:hover { background: #ddd9d0; }
+
+/* ---------------- workspace split ---------------- */
+
+#workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#gh-pane {
+  position: relative;
+  width: 50%;
+  height: 100%;
+  border-right: 1px solid #1c1c1e;
+  overflow: hidden;
+}
+
+#gh-canvas { display: block; width: 100%; height: 100%; }
+
+#gh-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 10px;
+  color: rgba(0,0,0,0.38);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+#splitter {
+  width: 5px;
+  background: #2e2e32;
+  cursor: col-resize;
+  flex-shrink: 0;
+}
+#splitter:hover { background: #4a90d9; }
+
+#viewport-pane {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+#viewport-container { width: 100%; height: 100%; }
+#viewport-container canvas { display: block; }
+
+#viewport-title {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e2124;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(0,0,0,0.25);
+  padding: 1px 8px;
+  border-radius: 2px;
+  cursor: default;
+}
+
+#viewport-mode {
+  position: absolute;
+  top: 6px;
+  left: 118px;
+  font-size: 10.5px;
+  color: #3a3f45;
+  background: rgba(255,255,255,0.35);
+  padding: 2px 7px;
+  border-radius: 2px;
+}
+
+#btn-zoom-ext {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 26px;
+  height: 24px;
+  border: 1px solid rgba(0,0,0,0.3);
+  background: rgba(255,255,255,0.55);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #222;
+}
+#btn-zoom-ext:hover { background: #fff; }
+
+/* ---------------- legend (Karamba HUD) ---------------- */
+
+#legend {
+  position: absolute;
+  right: 12px;
+  bottom: 16px;
+  display: none;
+  background: rgba(250, 250, 250, 0.82);
+  border: 1px solid rgba(0,0,0,0.3);
+  border-radius: 3px;
+  padding: 6px 8px;
+  min-width: 118px;
+}
+
+.legend-title { font-size: 10px; font-weight: 700; color: #222; margin-bottom: 4px; }
+
+.legend-body { display: flex; gap: 6px; }
+
+.legend-bar {
+  width: 16px;
+  height: 150px;
+  border: 1px solid rgba(0,0,0,0.4);
+  background: linear-gradient(to top,
+    #0000ff 0%, #00ffff 25%, #00ff00 50%, #ffff00 75%, #ff7f00 87.5%, #ff0000 100%);
+}
+
+.legend-ticks {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 150px;
+}
+.legend-tick { font-size: 9px; color: #222; font-family: Consolas, Menlo, monospace; }
+
+/* ---------------- search popup ---------------- */
+
+#search-popup {
+  position: absolute;
+  display: none;
+  width: 235px;
+  background: #fdfdfd;
+  border: 1px solid #6a6a70;
+  border-radius: 3px;
+  box-shadow: 3px 5px 14px rgba(0,0,0,0.4);
+  z-index: 50;
+  overflow: hidden;
+}
+
+#search-input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #ccc;
+  padding: 6px 9px;
+  font-size: 12px;
+  outline: none;
+}
+
+#search-list { max-height: 220px; overflow-y: auto; }
+
+.search-item {
+  padding: 4px 9px;
+  font-size: 11px;
+  color: #222;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+.search-item:hover, .search-item.first { background: #dcE9f7; }
+.search-cat { margin-left: auto; color: #999; font-size: 9px; }
+
+/* ---------------- status bar ---------------- */
+
+#statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 24px;
+  background: linear-gradient(#35353a, #2a2a2e);
+  border-top: 1px solid #17171a;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+#status-karamba {
+  color: #fff;
+  background: #d0021b;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 2px;
+}
+
+#status-text { color: #9aa4ae; }
