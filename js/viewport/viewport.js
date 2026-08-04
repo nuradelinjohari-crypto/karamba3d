@@ -186,6 +186,21 @@ export class Viewport {
     this.clear();
     let legend = null;
 
+    // symbol scale ∝ model size (like Karamba's ModelView size sliders)
+    const bb = new THREE.Box3();
+    const bbp = (x, y, z) => bb.expandByPoint(new THREE.Vector3(x, y, z));
+    for (const v of previews) {
+      if (v && v.kind === 'line') { bbp(v.a.x, v.a.y, v.a.z); bbp(v.b.x, v.b.y, v.b.z); }
+      else if (v && v.kind === 'point') bbp(v.x, v.y, v.z);
+      else if (v && v.kind === 'mesh') for (const p of v.vertices) bbp(p[0], p[1], p[2]);
+    }
+    for (const view of views) {
+      const fem = view.model && view.model.fem;
+      if (fem) for (const nd of fem.nodes) bbp(nd.x, nd.y, nd.z);
+    }
+    const diag = bb.isEmpty() ? 10 : bb.getSize(new THREE.Vector3()).length();
+    this.symScale = Math.max(0.02, Math.min(diag * 0.022, 0.6));
+
     // raw geometry previews — GH-style maroon
     const previewMat = new THREE.LineBasicMaterial({ color: 0x8d2323 });
     const lineVerts = [];
@@ -193,7 +208,7 @@ export class Viewport {
       if (v && v.kind === 'line') {
         lineVerts.push(v.a.x, v.a.y, v.a.z, v.b.x, v.b.y, v.b.z);
       } else if (v && v.kind === 'point') {
-        const m = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8),
+        const m = new THREE.Mesh(new THREE.SphereGeometry(this.symScale * 0.22, 8, 8),
           new THREE.MeshBasicMaterial({ color: 0x8d2323 }));
         m.position.set(v.x, v.y, v.z);
         this.modelGroup.add(m);
@@ -378,22 +393,23 @@ export class Viewport {
 
   _drawSupports(model, nodePos) {
     if (!model || !model.fem) return;
+    const s0 = this.symScale || 0.2;
     for (const s of model.fem.supports) {
       const p = nodePos[s.node];
       if (!p) continue;
       const cone = new THREE.Mesh(
-        new THREE.ConeGeometry(0.22, 0.5, 4),
+        new THREE.ConeGeometry(s0 * 0.9, s0 * 2, 4),
         new THREE.MeshLambertMaterial({ color: 0x2ea82e }));
-      cone.position.set(p[0], p[1], p[2] - 0.28);
+      cone.position.set(p[0], p[1], p[2] - s0 * 1.1);
       cone.rotation.x = Math.PI / 2;
       cone.rotation.y = Math.PI / 4;
       this.modelGroup.add(cone);
       // fixed-rotation supports get a small ring
       if (s.fix[3] || s.fix[4] || s.fix[5]) {
         const ring = new THREE.Mesh(
-          new THREE.TorusGeometry(0.16, 0.03, 6, 16),
+          new THREE.TorusGeometry(s0 * 0.65, s0 * 0.12, 6, 16),
           new THREE.MeshLambertMaterial({ color: 0x1f7a1f }));
-        ring.position.set(p[0], p[1], p[2] - 0.58);
+        ring.position.set(p[0], p[1], p[2] - s0 * 2.3);
         this.modelGroup.add(ring);
       }
     }
@@ -402,23 +418,27 @@ export class Viewport {
   _drawLoads(model) {
     if (!model || !model.fem) return;
     const fem = model.fem;
+    const s0 = this.symScale || 0.2;
     for (const pl of fem.pointLoads) {
       const n = fem.nodes[pl.node];
       if (!n) continue;
       const f = new THREE.Vector3(...pl.force);
       const mag = f.length();
       if (mag < 1e-9) continue;
-      const len = Math.min(0.4 + mag * 0.08, 2.5);
+      const len = Math.min(s0 * 1.6 + mag * 0.03 * s0, s0 * 10);
       const dir = f.clone().normalize();
       const origin = new THREE.Vector3(n.x, n.y, n.z).sub(dir.clone().multiplyScalar(len));
       const arrow = new THREE.ArrowHelper(dir, origin, len, 0xe8590c, len * 0.35, len * 0.16);
       this.modelGroup.add(arrow);
     }
     if (fem.gravity) {
-      // small gravity glyph at origin-ish corner of model
+      // gravity glyph floating above the model
+      let zTop = 0, cx = 0, cy = 0;
+      for (const nd of fem.nodes) { zTop = Math.max(zTop, nd.z); cx += nd.x; cy += nd.y; }
+      cx /= Math.max(fem.nodes.length, 1); cy /= Math.max(fem.nodes.length, 1);
       const arrow = new THREE.ArrowHelper(
         new THREE.Vector3(...fem.gravity.vec).normalize(),
-        new THREE.Vector3(0, 0, 2.2), 1.0, 0x9932cc, 0.35, 0.18);
+        new THREE.Vector3(cx, cy, zTop + s0 * 5), s0 * 4, 0x9932cc, s0 * 1.4, s0 * 0.7);
       this.modelGroup.add(arrow);
     }
   }

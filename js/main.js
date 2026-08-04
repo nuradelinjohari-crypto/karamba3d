@@ -261,15 +261,15 @@ fileInput.addEventListener('change', async () => {
     return;
   }
   window.__importedGeometry = { name: f.name, ...geo };
-  let node = engine.nodes.find(n => n.type === 'ImportGeometry');
-  if (!node) {
-    const r = canvas.getBoundingClientRect();
-    const p = engine.toWorld(80, r.height / 2);
-    node = engine.addNode('ImportGeometry', p.x, p.y);
+  const existing = engine.nodes.find(n => n.type === 'ImportGeometry');
+  if (!existing) {
+    // no import node on the canvas yet: load a ready-made analysis definition
+    // wired onto the imported model (Import → LtoB → Support/Gravity → Analyze → BeamView)
+    loadExample('imported');
+  } else {
+    engine.nodes.forEach(n => { if (n.type === 'ImportGeometry') { n.dirty = true; engine._markDirty(n); } });
+    engine.scheduleSolve();
   }
-  engine.nodes.forEach(n => { if (n.type === 'ImportGeometry') n.dirty = true; });
-  engine._markDirty(node);
-  engine.scheduleSolve();
   fileInput.value = '';
 });
 
@@ -319,13 +319,33 @@ function loadRhino3dm() {
 
 const pt3 = (v) => (Array.isArray(v) ? v : [v[0] ?? v.x ?? 0, v[1] ?? v.y ?? 0, v[2] ?? v.z ?? 0]);
 
+/** Unit scale to meters from the 3dm's declared unit system. */
+function unitScale(rh, us) {
+  const table = [
+    [rh.UnitSystem.Millimeters, 0.001],
+    [rh.UnitSystem.Centimeters, 0.01],
+    [rh.UnitSystem.Decimeters, 0.1],
+    [rh.UnitSystem.Meters, 1],
+    [rh.UnitSystem.Kilometers, 1000],
+    [rh.UnitSystem.Inches, 0.0254],
+    [rh.UnitSystem.Feet, 0.3048],
+  ];
+  for (const [sys, s] of table) if (us === sys || (us && sys && us.value === sys.value)) return s;
+  return null;
+}
+
 async function parse3dm(buffer) {
   const rh = await loadRhino3dm();
   const doc = rh.File3dm.fromByteArray(new Uint8Array(buffer));
   if (!doc) throw new Error('not a valid Rhino .3dm file');
+  let scale = unitScale(rh, doc.settings().modelUnitSystem);
+
   const lines = [], meshes = [], points = [];
   let skipped = 0;
   const objs = doc.objects();
+
+  // pass 1: raw extraction in document units
+  const rawCurves = [];   // arrays of polyline points
   for (let i = 0; i < objs.count; i++) {
     let geom;
     try { geom = objs.get(i).geometry(); } catch { continue; }
@@ -336,11 +356,11 @@ async function parse3dm(buffer) {
       } else if (geom instanceof rh.LineCurve) {
         const a = typeof geom.pointAtStart === 'function' ? geom.pointAtStart() : geom.pointAtStart;
         const b = typeof geom.pointAtEnd === 'function' ? geom.pointAtEnd() : geom.pointAtEnd;
-        lines.push([pt3(a), pt3(b)]);
+        rawCurves.push([pt3(a), pt3(b)]);
       } else if (geom instanceof rh.PolylineCurve) {
-        const nPts = geom.pointCount;
-        for (let k = 0; k < nPts - 1; k++)
-          lines.push([pt3(geom.point(k)), pt3(geom.point(k + 1))]);
+        const pts = [];
+        for (let k = 0; k < geom.pointCount; k++) pts.push(pt3(geom.point(k)));
+        rawCurves.push(pts);
       } else if (geom instanceof rh.Mesh) {
         const vl = geom.vertices(), fl = geom.faces();
         const vertices = [];
@@ -353,24 +373,63 @@ async function parse3dm(buffer) {
         }
         meshes.push({ vertices, faces });
       } else if (geom instanceof rh.Curve) {
-        // arcs, nurbs, polycurves… sample into segments
+        // arcs, nurbs, polycurves: adaptive sample — estimate length first
         const dom = geom.domain;
         const t0 = dom[0] ?? dom.t0 ?? 0, t1 = dom[1] ?? dom.t1 ?? 1;
-        const N = 16;
-        let prev = pt3(geom.pointAt(t0));
-        for (let k = 1; k <= N; k++) {
-          const p = pt3(geom.pointAt(t0 + (t1 - t0) * k / N));
-          lines.push([prev, p]);
-          prev = p;
-        }
+        const probe = [];
+        for (let k = 0; k <= 16; k++) probe.push(pt3(geom.pointAt(t0 + (t1 - t0) * k / 16)));
+        let len = 0;
+        for (let k = 1; k < probe.length; k++)
+          len += Math.hypot(probe[k][0] - probe[k - 1][0], probe[k][1] - probe[k - 1][1], probe[k][2] - probe[k - 1][2]);
+        rawCurves.push({ curve: geom, t0, t1, len, keep: true });
+        continue; // keep geom alive for pass 2
       } else {
         skipped++;
       }
     } catch { skipped++; }
   }
+
+  // unit fallback heuristic when the file has no usable unit system
+  if (!scale) {
+    let maxAbs = 0;
+    const upd = p => { maxAbs = Math.max(maxAbs, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2])); };
+    for (const c of rawCurves) (Array.isArray(c) ? c : []).forEach(upd);
+    points.forEach(upd);
+    scale = maxAbs > 5000 ? 0.001 : maxAbs > 500 ? 0.01 : 1;
+    console.warn(`3dm import: unit system unknown — assuming scale ${scale} (→ m)`);
+  }
+
+  // pass 2: convert to meters; sample curved members by arc length (~0.35 m target, min 2 segs)
+  const S = scale;
+  const targetSeg = 0.35;
+  for (const c of rawCurves) {
+    if (Array.isArray(c)) {
+      for (let k = 0; k < c.length - 1; k++) {
+        lines.push([
+          [c[k][0] * S, c[k][1] * S, c[k][2] * S],
+          [c[k + 1][0] * S, c[k + 1][1] * S, c[k + 1][2] * S],
+        ]);
+      }
+    } else {
+      const lenM = c.len * S;
+      const N = Math.max(2, Math.min(32, Math.ceil(lenM / targetSeg)));
+      let prev = pt3(c.curve.pointAt(c.t0)).map(v => v * S);
+      for (let k = 1; k <= N; k++) {
+        const p = pt3(c.curve.pointAt(c.t0 + (c.t1 - c.t0) * k / N)).map(v => v * S);
+        lines.push([prev, p]);
+        prev = p;
+      }
+    }
+  }
+  const ptsM = points.map(p => [p[0] * S, p[1] * S, p[2] * S]);
+  const meshesM = meshes.map(m => ({
+    vertices: m.vertices.map(p => [p[0] * S, p[1] * S, p[2] * S]),
+    faces: m.faces,
+  }));
+
   if (doc.delete) doc.delete();
   if (skipped) console.warn(`3dm import: skipped ${skipped} unsupported objects (breps/surfaces — mesh them in Rhino first)`);
-  return { lines, meshes, points };
+  return { lines, meshes: meshesM, points: ptsM, scale: S };
 }
 
 function parseDXF(text) {
@@ -618,7 +677,43 @@ function loadExample(which) {
     W(opti, 2, p2, 0);
   }
 
-  setTimeout(() => { engine.zoomExtents(); viewport.zoomExtents(); }, 150);
+  if (which === 'imported') {
+    const imp = N('ImportGeometry', 30, 60);
+    imp.previewOff = true;      // BeamView displays the model — hide raw preview
+    const pInfo = N('Panel', 30, 150, { w: 185, h: 46 });
+    W(imp, 3, pInfo, 0);
+
+    const sd = N('NumberSlider', 30, 250, { name: 'Diam cm', min: 1, max: 30, step: 0.5, value: 6 });
+    const st2 = N('NumberSlider', 30, 290, { name: 'Wall cm', min: 0.1, max: 3, step: 0.1, value: 0.4 });
+    const mat = N('MatSelect', 30, 330, { index: 0 });
+    const cro = N('CroSecCircle', 235, 260);
+    W(sd, 0, cro, 0); W(st2, 0, cro, 1); W(mat, 0, cro, 2);
+
+    const ltob = N('LineToBeam', 430, 60);
+    W(imp, 0, ltob, 0); W(cro, 0, ltob, 2);
+
+    const tol = N('NumberSlider', 30, 420, { name: 'Base Tol m', min: 0.01, max: 1, step: 0.01, value: 0.08 });
+    const bot = N('BottomPoints', 235, 400);
+    W(ltob, 1, bot, 0); W(tol, 0, bot, 1);
+    const supp = N('Support', 430, 390, { fix: [true, true, true, false, false, false] });
+    W(bot, 0, supp, 0);
+    const grav = N('Gravity', 430, 500);
+
+    const ass = N('Assemble', 625, 140);
+    W(ltob, 0, ass, 0); W(supp, 0, ass, 1); W(grav, 0, ass, 2);
+    const ana = N('AnalyzeThI', 780, 140);
+    W(ass, 0, ana, 0);
+    const defS = N('NumberSlider', 625, 330, { name: 'Def Scale', min: 0, max: 1000, step: 5, value: 50 });
+    const bview = N('BeamView', 945, 140);
+    W(ana, 0, bview, 0); W(defS, 0, bview, 1);
+
+    const p1 = N('Panel', 945, 270, { w: 160, h: 50 });
+    W(ana, 1, p1, 0);
+    const p2 = N('Panel', 945, 340, { w: 160, h: 50 });
+    W(ass, 2, p2, 0);
+  }
+
+  setTimeout(() => { engine.zoomExtents(); viewport.zoomExtents(); }, which === 'imported' ? 500 : 150);
 }
 
 /* ================= boot ================= */

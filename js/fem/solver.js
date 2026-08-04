@@ -16,7 +16,8 @@
 const DOF = 6;
 
 export class FemModel {
-  constructor() {
+  /** @param tol node-weld limit distance in m (Karamba LDist default: 5 mm) */
+  constructor(tol = 0.005) {
     this.nodes = [];          // [{x,y,z}]
     this.elements = [];       // beams [{n0,n1, crosec, material, id}]
     this.shells = [];         // [{n0,n1,n2, t (cm), material, id}]
@@ -24,15 +25,28 @@ export class FemModel {
     this.pointLoads = [];     // [{node, force:[3], moment:[3]}]
     this.lineLoads = [];      // [{a:{x,y,z}, b:{x,y,z}, w:[wx,wy,wz] kN/m global}]
     this.gravity = null;      // {vec:[gx,gy,gz]} in multiples of g
-    this.nodeMap = new Map();
+    this.tol = tol;
+    this._grid = new Map();   // spatial hash for tolerant node welding
   }
 
   addNode(x, y, z) {
-    const key = `${x.toFixed(6)},${y.toFixed(6)},${z.toFixed(6)}`;
-    if (this.nodeMap.has(key)) return this.nodeMap.get(key);
+    const t = this.tol;
+    const gx = Math.round(x / t), gy = Math.round(y / t), gz = Math.round(z / t);
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dz = -1; dz <= 1; dz++) {
+          const cell = this._grid.get(`${gx + dx},${gy + dy},${gz + dz}`);
+          if (!cell) continue;
+          for (const idx of cell) {
+            const p = this.nodes[idx];
+            if (Math.hypot(p.x - x, p.y - y, p.z - z) <= t) return idx;
+          }
+        }
     const idx = this.nodes.length;
     this.nodes.push({ x, y, z });
-    this.nodeMap.set(key, idx);
+    const key = `${gx},${gy},${gz}`;
+    if (!this._grid.has(key)) this._grid.set(key, []);
+    this._grid.get(key).push(idx);
     return idx;
   }
 
@@ -397,13 +411,76 @@ export function analyze(model) {
   }
   const ndof = n * DOF;
 
-  const K = Array.from({ length: ndof }, () => new Float64Array(ndof));
-  const F = new Float64Array(ndof);
+  /* ---- connectivity check: drop components that carry no support ----
+   * (imported CAD models often contain a few stray members; real Karamba
+   *  reports rigid-body modes — we exclude them and warn instead) */
+  const parent = new Int32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  for (const el of model.elements) union(el.n0, el.n1);
+  for (const sh of model.shells) { union(sh.n0, sh.n1); union(sh.n1, sh.n2); }
+  // per-component rigid-body restraint check: a component is only adequately
+  // supported if its supports restrain all 6 rigid modes (e.g. a stray member
+  // pinned at a single point can still spin — that's a mechanism, not support)
+  const compSupports = new Map();   // root → [support,…]
+  for (const s of model.supports) {
+    if (s.node < 0 || s.node >= n) continue;
+    const r = find(s.node);
+    if (!compSupports.has(r)) compSupports.set(r, []);
+    compSupports.get(r).push(s);
+  }
+  const compElems = new Map();      // root → element count (size proxy)
+  for (const el of model.elements) {
+    const r = find(el.n0);
+    compElems.set(r, (compElems.get(r) || 0) + 1);
+  }
+  for (const sh of model.shells) {
+    const r = find(sh.n0);
+    compElems.set(r, (compElems.get(r) || 0) + 1);
+  }
+  const restrainedRoots = new Set();
+  for (const [root, sups] of compSupports) {
+    if (rigidModesRestrained(sups, model.nodes)) restrainedRoots.add(root);
+  }
+  if (compElems.size && restrainedRoots.size === 0) {
+    return {
+      ok: false,
+      error: model.supports.length
+        ? 'Supports are insufficient — rigid-body modes remain (a pinned point still allows rotation). Fix rotations at a support or add more support points.'
+        : 'Model has no supports — structure is kinematic. Add a Support component.',
+    };
+  }
+  // the biggest component must be properly restrained, otherwise the analysis is pointless
+  let mainRoot = null, mainCount = -1;
+  for (const [r, c] of compElems) if (c > mainCount) { mainCount = c; mainRoot = r; }
+  if (!restrainedRoots.has(mainRoot)) {
+    return {
+      ok: false,
+      error: 'The main structure is insufficiently supported — rigid-body modes remain. Add supports (or fix rotations at one).',
+    };
+  }
+
+  const nodeActive = new Uint8Array(n);
+  let excludedElems = 0;
+  const isActive = (ni) => restrainedRoots.has(find(ni));
+  for (const el of model.elements) {
+    if (isActive(el.n0)) { el._excluded = false; nodeActive[el.n0] = nodeActive[el.n1] = 1; }
+    else { el._excluded = true; excludedElems++; }
+  }
+  for (const sh of model.shells) {
+    if (isActive(sh.n0)) { sh._excluded = false; nodeActive[sh.n0] = nodeActive[sh.n1] = nodeActive[sh.n2] = 1; }
+    else { sh._excluded = true; excludedElems++; }
+  }
+
+  const F = new Float64Array(ndof);     // full rhs (incl. equivalent span loads)
+  const Fext = new Float64Array(ndof);  // direct external loads only (for reactions)
   const elemData = [];
   const shellData = [];
 
   /* ---- beams ---- */
   for (const el of model.elements) {
+    if (el._excluded) continue;
     const p0 = model.nodes[el.n0], p1 = model.nodes[el.n1];
     const ax = beamAxes(p0, p1);
     if (!isFinite(ax.L) || ax.L < 1e-9) continue;
@@ -417,9 +494,6 @@ export function analyze(model) {
     const map = [];
     for (let d = 0; d < DOF; d++) map.push(el.n0 * DOF + d);
     for (let d = 0; d < DOF; d++) map.push(el.n1 * DOF + d);
-    for (let i = 0; i < 12; i++)
-      for (let j = 0; j < 12; j++)
-        K[map[i]][map[j]] += kG[i][j];
 
     // uniform line loads on this element → local w, fixed-end forces
     const f0 = new Float64Array(12);
@@ -454,11 +528,12 @@ export function analyze(model) {
         F[map[i]] -= s;
       }
     }
-    elemData.push({ el, ax, kL, T, map, E, A, cs, mat, f0, wLocalMag: hasSpanLoad });
+    elemData.push({ el, ax, kL, T, kG, map, E, A, cs, mat, f0, wLocalMag: hasSpanLoad });
   }
 
   /* ---- shells ---- */
   for (const sh of model.shells) {
+    if (sh._excluded) continue;
     const p = [model.nodes[sh.n0], model.nodes[sh.n1], model.nodes[sh.n2]];
     const ax = triAxes(p[0], p[1], p[2]);
     if (!(ax.area > 1e-10)) continue;
@@ -485,32 +560,30 @@ export function analyze(model) {
     const nodesIdx = [sh.n0, sh.n1, sh.n2];
     const map = [];
     for (const ni of nodesIdx) for (let d = 0; d < DOF; d++) map.push(ni * DOF + d);
-    for (let i = 0; i < 18; i++)
-      for (let j = 0; j < 18; j++)
-        K[map[i]][map[j]] += kG[i][j];
 
     // gravity self weight lumped at nodes
     if (model.gravity) {
       const w = mat.gamma * t * ax.area; // kN
       const g = model.gravity.vec;
       for (const ni of nodesIdx) {
-        F[ni * DOF + 0] += w * g[0] / 3;
-        F[ni * DOF + 1] += w * g[1] / 3;
-        F[ni * DOF + 2] += w * g[2] / 3;
+        for (let d = 0; d < 3; d++) {
+          F[ni * DOF + d] += w * g[d] / 3;
+          Fext[ni * DOF + d] += w * g[d] / 3;
+        }
       }
     }
-    shellData.push({ sh, ax, x, y, T, map, E, nu, t, mat, nodesIdx });
+    shellData.push({ sh, ax, x, y, kL, T, kG, map, E, nu, t, mat, nodesIdx });
   }
 
   /* ---- point loads ---- */
   for (const pl of model.pointLoads) {
     if (pl.node < 0 || pl.node >= n) continue;
     const base = pl.node * DOF;
-    F[base] += pl.force[0]; F[base + 1] += pl.force[1]; F[base + 2] += pl.force[2];
-    if (pl.moment) { F[base + 3] += pl.moment[0]; F[base + 4] += pl.moment[1]; F[base + 5] += pl.moment[2]; }
+    for (let d = 0; d < 3; d++) { F[base + d] += pl.force[d]; Fext[base + d] += pl.force[d]; }
+    if (pl.moment) for (let d = 0; d < 3; d++) { F[base + 3 + d] += pl.moment[d]; Fext[base + 3 + d] += pl.moment[d]; }
   }
 
-  /* ---- supports & solve ---- */
+  /* ---- supports ---- */
   const fixed = new Uint8Array(ndof);
   let anySupport = false;
   for (const s of model.supports) {
@@ -520,42 +593,84 @@ export function analyze(model) {
   }
   if (!anySupport) return { ok: false, error: 'Model has no supports — structure is kinematic. Add a Support component.' };
 
-  // shell-only nodes: if a node touches only shells, its drilling stiffness is tiny —
-  // handled by the per-element drilling penalty; nothing extra needed here.
+  // constrain every DOF of inactive/orphan nodes (excluded components, unused points)
+  for (let i = 0; i < n; i++)
+    if (!nodeActive[i])
+      for (let d = 0; d < DOF; d++) fixed[i * DOF + d] = 1;
 
-  const freeIdx = [];
-  for (let i = 0; i < ndof; i++) if (!fixed[i]) freeIdx.push(i);
-  const m = freeIdx.length;
-  const Kr = Array.from({ length: m }, () => new Float64Array(m));
-  const Fr = new Float64Array(m);
-  for (let i = 0; i < m; i++) {
-    Fr[i] = F[freeIdx[i]];
-    const Ki = K[freeIdx[i]];
-    const Kri = Kr[i];
-    for (let j = 0; j < m; j++) Kri[j] = Ki[freeIdx[j]];
+  /* ---- sparse skyline solve with RCM ordering + penalty BCs ----
+   * Large imported models (1000s of DOFs) make a dense K infeasible;
+   * RCM keeps the profile narrow, COLSOL (Bathe) factorizes it in place. */
+  const adj = Array.from({ length: n }, () => new Set());
+  for (const ed of elemData) { adj[ed.el.n0].add(ed.el.n1); adj[ed.el.n1].add(ed.el.n0); }
+  for (const sd of shellData) {
+    const [a, b, c] = sd.nodesIdx;
+    adj[a].add(b); adj[a].add(c); adj[b].add(a); adj[b].add(c); adj[c].add(a); adj[c].add(b);
   }
+  const nodeOrder = rcmOrder(n, adj);          // new index → old node
+  const dofNew = new Int32Array(ndof);         // old dof → new dof
+  nodeOrder.forEach((oldNode, newI) => {
+    for (let d = 0; d < DOF; d++) dofNew[oldNode * DOF + d] = newI * DOF + d;
+  });
 
-  const u_r = choleskySolve(Kr, Fr);
-  if (!u_r) return { ok: false, error: 'Stiffness matrix is singular — structure is kinematic (under-constrained). Check supports.' };
-
-  const u = new Float64Array(ndof);
-  for (let i = 0; i < m; i++) u[freeIdx[i]] = u_r[i];
-
-  /* ---- reactions ---- */
-  const reactions = [];
-  for (const s of model.supports) {
-    const r = { node: s.node, force: [0, 0, 0], moment: [0, 0, 0] };
-    for (let d = 0; d < DOF; d++) {
-      const gi = s.node * DOF + d;
-      if (!fixed[gi]) continue;
-      let s2 = 0;
-      const Kgi = K[gi];
-      for (let j = 0; j < ndof; j++) s2 += Kgi[j] * u[j];
-      const val = s2 - F[gi];
-      if (d < 3) r.force[d] = val; else r.moment[d - 3] = val;
+  // column profile
+  const fr = new Int32Array(ndof);
+  for (let j = 0; j < ndof; j++) fr[j] = j;
+  const allMaps = [];
+  for (const ed of elemData) allMaps.push(ed.map);
+  for (const sd of shellData) allMaps.push(sd.map);
+  for (const map of allMaps) {
+    let pmin = Infinity;
+    for (const gi of map) pmin = Math.min(pmin, dofNew[gi]);
+    for (const gi of map) {
+      const j = dofNew[gi];
+      if (pmin < fr[j]) fr[j] = pmin;
     }
-    reactions.push(r);
   }
+  const sky = new Array(ndof);
+  for (let j = 0; j < ndof; j++) sky[j] = new Float64Array(j - fr[j] + 1);
+
+  const scatter = (map, kG, sz) => {
+    for (let i = 0; i < sz; i++) {
+      const pi = dofNew[map[i]];
+      for (let j = 0; j < sz; j++) {
+        const pj = dofNew[map[j]];
+        if (pi <= pj) sky[pj][pi - fr[pj]] += kG[i][j];
+      }
+    }
+  };
+  for (const ed of elemData) { scatter(ed.map, ed.kG, 12); ed.kG = null; }
+  for (const sd of shellData) { scatter(sd.map, sd.kG, 18); sd.kG = null; }
+
+  let diagMax = 0;
+  for (let j = 0; j < ndof; j++) diagMax = Math.max(diagMax, sky[j][j - fr[j]]);
+  const PEN = diagMax * 1e8;
+  const b = new Float64Array(ndof);
+  for (let i = 0; i < ndof; i++) {
+    const j = dofNew[i];
+    if (fixed[i]) { sky[j][j - fr[j]] += PEN; b[j] = 0; }
+    else b[j] = F[i];
+  }
+
+  const fact = skyFactor(sky, fr, ndof, diagMax * 1e-12);
+  if (fact.bad >= 0) {
+    const newNode = Math.floor(fact.bad / DOF), dofIdx = fact.bad % DOF;
+    const oldNode = nodeOrder[newNode];
+    const p = model.nodes[oldNode];
+    const dofName = ['Tx', 'Ty', 'Tz', 'Rx', 'Ry', 'Rz'][dofIdx];
+    return {
+      ok: false,
+      error: `Structure is kinematic: free ${dofName} at node (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}) m — check supports/connectivity there.`,
+      badNode: oldNode, badDof: dofIdx, badPos: { ...p },
+    };
+  }
+  const D = fact.D;
+  const uPerm = skySolve(sky, fr, D, b);
+  const u = new Float64Array(ndof);
+  for (let i = 0; i < ndof; i++) u[i] = uPerm[dofNew[i]];
+
+  // reactions are recovered from element end-force sums after member recovery
+  const nodalSum = new Float64Array(ndof);
 
   /* ---- beam member forces + utilization ---- */
   const results = [];
@@ -573,6 +688,12 @@ export function analyze(model) {
       let s = 0;
       for (let j = 0; j < 12; j++) s += ed.kL[i][j] * uL[j];
       fL[i] = s + ed.f0[i]; // add fixed-end forces from span loads
+    }
+    // accumulate global end forces for reaction recovery: Tᵀ fL
+    for (let i = 0; i < 12; i++) {
+      let s = 0;
+      for (let j = 0; j < 12; j++) s += ed.T[j][i] * fL[j];
+      nodalSum[ed.map[i]] += s;
     }
     const L = ed.ax.L;
     const N = fL[6];
@@ -618,6 +739,20 @@ export function analyze(model) {
       for (let j = 0; j < 18; j++) s += sd.T[i][j] * uG[j];
       uL[i] = s;
     }
+    // global end forces for reaction recovery: Tᵀ (kL uL)
+    {
+      const fL = new Float64Array(18);
+      for (let i = 0; i < 18; i++) {
+        let s = 0;
+        for (let j = 0; j < 18; j++) s += sd.kL[i][j] * uL[j];
+        fL[i] = s;
+      }
+      for (let i = 0; i < 18; i++) {
+        let s = 0;
+        for (let j = 0; j < 18; j++) s += sd.T[j][i] * fL[j];
+        nodalSum[sd.map[i]] += s;
+      }
+    }
     // membrane strains/stresses (constant): dofs [u,v] per node
     const um = [uL[0], uL[1], uL[6], uL[7], uL[12], uL[13]];
     const { B } = shellB_membrane(sd.x, sd.y);
@@ -653,6 +788,20 @@ export function analyze(model) {
     shellResults.push({ sh: sd.sh, nodesIdx: sd.nodesIdx, vonMises: vmCm2, util });
   }
 
+  /* ---- reactions: R = Σ element end forces − external loads ---- */
+  const reactions = [];
+  for (const s of model.supports) {
+    if (s.node < 0 || s.node >= n) continue;
+    const r = { node: s.node, force: [0, 0, 0], moment: [0, 0, 0] };
+    for (let d = 0; d < DOF; d++) {
+      const gi = s.node * DOF + d;
+      if (!fixed[gi]) continue;
+      const val = nodalSum[gi] - Fext[gi];
+      if (d < 3) r.force[d] = val; else r.moment[d - 3] = val;
+    }
+    reactions.push(r);
+  }
+
   /* ---- nodal displacements ---- */
   const disp = [];
   let maxDisp = 0;
@@ -670,6 +819,9 @@ export function analyze(model) {
   return {
     ok: true, u, disp, maxDisp, results, shellResults, reactions, maxUtil,
     elasticEnergy, mass, model,
+    warning: excludedElems
+      ? `${excludedElems} disconnected element(s) carry no support — excluded from the analysis`
+      : null,
   };
 }
 
@@ -768,37 +920,115 @@ export function optimizeCroSec(model, candidates, maxUtil = 1.0, iterations = 5)
   return res;
 }
 
-/* ================= linear solve ================= */
-
-function choleskySolve(A, b) {
-  const nn = b.length;
-  if (nn === 0) return new Float64Array(0);
-  const L = Array.from({ length: nn }, () => new Float64Array(nn));
-  const D = new Float64Array(nn);
-  for (let j = 0; j < nn; j++) {
-    let d = A[j][j];
-    for (let k = 0; k < j; k++) d -= L[j][k] * L[j][k] * D[k];
-    if (d < 1e-10) return null;
-    D[j] = d;
-    L[j][j] = 1;
-    for (let i = j + 1; i < nn; i++) {
-      let s = A[i][j];
-      for (let k = 0; k < j; k++) s -= L[i][k] * L[j][k] * D[k];
-      L[i][j] = s / d;
+/**
+ * True iff the given supports restrain all 6 rigid-body modes.
+ * Each fixed translational DOF at point p contributes the constraint row
+ * [e, (p−c)×e] on the rigid motion (t, ω); each fixed rotation contributes
+ * [0, e]. Restrained ⇔ the rows have rank 6.
+ */
+function rigidModesRestrained(sups, nodes) {
+  // centroid of support points for conditioning
+  let cx = 0, cy = 0, cz = 0, np = 0;
+  for (const s of sups) { const p = nodes[s.node]; cx += p.x; cy += p.y; cz += p.z; np++; }
+  if (!np) return false;
+  cx /= np; cy /= np; cz /= np;
+  const rows = [];
+  const E = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (const s of sups) {
+    const p = nodes[s.node];
+    const r = [p.x - cx, p.y - cy, p.z - cz];
+    for (let d = 0; d < 3; d++) {
+      if (s.fix[d]) {
+        const e = E[d];
+        rows.push([...e,
+          r[1] * e[2] - r[2] * e[1],
+          r[2] * e[0] - r[0] * e[2],
+          r[0] * e[1] - r[1] * e[0]]);
+      }
+      if (s.fix[3 + d]) rows.push([0, 0, 0, ...E[d]]);
     }
   }
-  const y = new Float64Array(nn);
-  for (let i = 0; i < nn; i++) {
-    let s = b[i];
-    for (let k = 0; k < i; k++) s -= L[i][k] * y[k];
-    y[i] = s;
+  if (rows.length < 6) return false;
+  // Gaussian elimination rank with partial pivoting
+  const m = rows.map(r => [...r]);
+  let rank = 0;
+  for (let col = 0; col < 6 && rank < m.length; col++) {
+    let piv = -1, best = 1e-9;
+    for (let i = rank; i < m.length; i++)
+      if (Math.abs(m[i][col]) > best) { best = Math.abs(m[i][col]); piv = i; }
+    if (piv < 0) continue;
+    [m[rank], m[piv]] = [m[piv], m[rank]];
+    for (let i = 0; i < m.length; i++) {
+      if (i === rank || Math.abs(m[i][col]) < 1e-12) continue;
+      const f = m[i][col] / m[rank][col];
+      for (let k = col; k < 6; k++) m[i][k] -= f * m[rank][k];
+    }
+    rank++;
   }
-  for (let i = 0; i < nn; i++) y[i] /= D[i];
-  const x = new Float64Array(nn);
-  for (let i = nn - 1; i >= 0; i--) {
-    let s = y[i];
-    for (let k = i + 1; k < nn; k++) s -= L[k][i] * x[k];
-    x[i] = s;
+  return rank >= 6;
+}
+
+/* ================= sparse skyline solve ================= */
+
+/** Reverse Cuthill-McKee node ordering. Returns array: new index → old node. */
+function rcmOrder(n, adj) {
+  const deg = i => adj[i].size;
+  const visited = new Uint8Array(n);
+  const order = [];
+  while (order.length < n) {
+    // start each component at its min-degree unvisited node
+    let start = -1, best = Infinity;
+    for (let i = 0; i < n; i++)
+      if (!visited[i] && deg(i) < best) { best = deg(i); start = i; }
+    visited[start] = 1;
+    const queue = [start];
+    order.push(start);
+    for (let q = 0; q < queue.length; q++) {
+      const neigh = [...adj[queue[q]]].filter(v => !visited[v]).sort((a, b) => deg(a) - deg(b));
+      for (const v of neigh) { visited[v] = 1; queue.push(v); order.push(v); }
+    }
+  }
+  return order.reverse();
+}
+
+/** In-place LDLᵀ skyline factorization (Bathe's COLSOL). Returns {D} or {bad: failing column}. */
+function skyFactor(sky, fr, ndof, tolAbs) {
+  const D = new Float64Array(ndof);
+  for (let j = 0; j < ndof; j++) {
+    const cj = sky[j], fj = fr[j];
+    for (let i = fj + 1; i < j; i++) {
+      const fi = fr[i], ci = sky[i];
+      const m0 = Math.max(fi, fj);
+      let s = cj[i - fj];
+      for (let m = m0; m < i; m++) s -= ci[m - fi] * cj[m - fj];
+      cj[i - fj] = s;
+    }
+    let d = cj[j - fj];
+    for (let m = fj; m < j; m++) {
+      const g = cj[m - fj];
+      const l = g / D[m];
+      d -= l * g;
+      cj[m - fj] = l;
+    }
+    if (!(d > tolAbs)) return { bad: j };
+    D[j] = d;
+  }
+  return { D, bad: -1 };
+}
+
+function skySolve(sky, fr, D, b) {
+  const nn = b.length;
+  const x = Float64Array.from(b);
+  for (let j = 0; j < nn; j++) {          // L z = b
+    const cj = sky[j], fj = fr[j];
+    let s = x[j];
+    for (let m = fj; m < j; m++) s -= cj[m - fj] * x[m];
+    x[j] = s;
+  }
+  for (let j = 0; j < nn; j++) x[j] /= D[j];
+  for (let j = nn - 1; j >= 0; j--) {     // Lᵀ x = w
+    const cj = sky[j], fj = fr[j], xj = x[j];
+    for (let m = fj; m < j; m++) x[m] -= cj[m - fj] * xj;
   }
   return x;
 }

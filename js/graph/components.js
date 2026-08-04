@@ -328,7 +328,7 @@ def({
     { name: 'Identifier', nick: 'Id', default: '' },
     { name: 'CroSec', nick: 'CroSec' },
   ],
-  outputs: [{ name: 'Elem', nick: 'Elem' }, { name: 'Info', nick: 'Info' }],
+  outputs: [{ name: 'Elem', nick: 'Elem' }, { name: 'Pts', nick: 'Pts' }, { name: 'Info', nick: 'Info' }],
   solve: (ins) => {
     const lines = asLines(ins[0]);
     const id = ins[1][0] || '';
@@ -337,7 +337,32 @@ def({
       kind: 'beam', line: l, id: id ? `${id}` : `elem_${i}`,
       crosec: crosec ? crosec.data : null, material: crosec?.materialName || null,
     }));
-    return { Elem: beams, Info: [`${beams.length} beams created`] };
+    // unique endpoints (welded at 5 mm, like Karamba's LDist)
+    const pts = [];
+    const seen = new Set();
+    for (const l of lines) for (const p of [l.a, l.b]) {
+      const k = `${Math.round(p.x / 0.005)},${Math.round(p.y / 0.005)},${Math.round(p.z / 0.005)}`;
+      if (!seen.has(k)) { seen.add(k); pts.push(p); }
+    }
+    return { Elem: beams, Pts: pts, Info: [`${beams.length} beams created, ${pts.length} nodes`] };
+  },
+});
+
+def({
+  type: 'BottomPoints', name: 'Bottom Points', nick: 'BotPts',
+  category: 'Karamba3D|Utils',
+  inputs: [
+    { name: 'Points', nick: 'Pts', required: true },
+    { name: 'Tolerance [m]', nick: 'Tol', default: 0.05 },
+  ],
+  outputs: [{ name: 'Bottom Points', nick: 'Bot' }, { name: 'Count', nick: 'N' }],
+  solve: (ins) => {
+    const pts = ins[0].map(asPoint).filter(Boolean);
+    if (!pts.length) return { 'Bottom Points': [], Count: [0] };
+    const tol = Math.max(num(ins[1][0], 0.05), 1e-4);
+    const zmin = Math.min(...pts.map(p => p.z));
+    const bot = pts.filter(p => p.z <= zmin + tol);
+    return { 'Bottom Points': bot, Count: [bot.length] };
   },
 });
 
@@ -645,13 +670,13 @@ function buildFem(modelVal) {
     }
   }
   for (const s of modelVal.supports) {
-    const ni = fem.findClosestNode(s.pos, 1e-3);
+    const ni = fem.findClosestNode(s.pos, 0.03);
     if (ni >= 0) fem.supports.push({ node: ni, fix: s.fix.map(b => b ? 1 : 0) });
   }
   for (const l of modelVal.loads) {
     if (l.type === 'gravity') fem.gravity = { vec: l.vec };
     else if (l.type === 'point') {
-      const ni = fem.findClosestNode(l.pos, 1e-3);
+      const ni = fem.findClosestNode(l.pos, 0.03);
       if (ni >= 0) fem.pointLoads.push({ node: ni, force: l.force, moment: l.moment || null });
     } else if (l.type === 'line') {
       fem.lineLoads.push({ a: l.a, b: l.b, w: l.w });
@@ -742,11 +767,12 @@ def({
     { name: 'Elastic Energy [kNm]', nick: 'Energy' },
     { name: 'Info', nick: 'Info' },
   ],
-  solve: (ins) => {
+  solve: (ins, node) => {
     const mv = ins[0].find(v => v && v.kind === 'model');
     if (!mv) return { Model: [], 'Max Displacement [cm]': [], 'Gravity Force [kN]': [], 'Elastic Energy [kNm]': [], Info: [] };
     const res = analyze(mv.fem);
     if (!res.ok) throw new Error(res.error);
+    if (res.warning) node.warning = res.warning;
     const out = { kind: 'analysis', ...res, sourceModel: mv };
     let g = 0;
     if (mv.fem.gravity) g = res.mass * 9.80665 / 1000; // kN
@@ -987,7 +1013,7 @@ export const COMPONENT_TABS = [
       { name: '4.Material', items: ['MatSelect', 'MatProps'] },
       { name: '5.Algorithms', items: ['AnalyzeThI', 'OptiCroSec'] },
       { name: '6.Results', items: ['ModelView', 'BeamView', 'NodalDisp', 'ReactionForces', 'Utilization', 'BeamForces'] },
-      { name: 'Utils', items: ['TrussGenerator', 'PortalFrame', 'ShellCanopy'] },
+      { name: 'Utils', items: ['TrussGenerator', 'PortalFrame', 'ShellCanopy', 'BottomPoints'] },
     ],
   },
 ];

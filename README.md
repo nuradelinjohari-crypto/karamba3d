@@ -54,6 +54,15 @@ beam section **CHS Ø 114.3 × 4 mm** when nothing is wired in.
    - **`.dxf`** — LINE entities.
    - **`.json`** — `{"lines": [[[x,y,z],[x,y,z]],…], "meshes":[{"vertices":[…],"faces":[…]}]}`.
    Then wire *Import ▸ Lines → Line To Beam* and/or *Import ▸ Mesh → Mesh To Shell*.
+   Importing into an empty canvas **auto-loads a ready analysis definition**: Import →
+   Line To Beam (+CHS section sliders) → Bottom Points → Support → Gravity → Assemble →
+   Analyze → BeamView — your model appears analyzed in the viewport immediately, and
+   every slider re-runs the pipeline on it. Units are read from the .3dm header
+   (mm/cm/m/in/ft) and converted to meters; curved members (arcs/NURBS) are sampled
+   into beam segments by arc length; endpoints are welded at 5 mm (Karamba's LDist).
+   Disconnected fragments that carry no adequate support are excluded with a warning,
+   and genuinely under-supported structures get a precise diagnostic naming the free
+   DOF and its node position.
 5. Right-drag = pan canvas / orbit viewport · Shift+drag = pan viewport · wheel = zoom.
 6. **File → Save Definition** exports the graph as `.ghjson`; reload it any time.
 
