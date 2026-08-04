@@ -63,7 +63,9 @@ function check(name, got, want, tolPct) {
       asym = Math.max(asym, Math.abs(K[i][j] - K[j][i]));
       kmax = Math.max(kmax, Math.abs(K[i][j]));
     }
-  check('shell K symmetry (rel asym)', asym / kmax, 0, 1e-6 * 100 + 1e-9);
+  const symOk = asym / kmax < 1e-12;
+  console.log(`${symOk ? 'PASS' : 'FAIL'} shell K symmetry: rel asym ${(asym / kmax).toExponential(2)}`);
+  symOk ? pass++ : fail++;
   // rigid translation w: dofs slot2 per node =1 → K u = 0
   const u = new Float64Array(18);
   u[2] = u[8] = u[14] = 1;
