@@ -434,7 +434,9 @@ ghInput.addEventListener('change', async () => {
       `◂ ${f.name} ▸`,
       `${report.mapped} components mapped, ${report.wires} wires`,
       report.sliders ? `${report.sliders} sliders restored` : null,
+      report.skipped ? `${report.skipped} annotations skipped (groups/scribbles→notes)` : null,
       report.rebound ? `${report.rebound} geometry inputs re-bound to Import` : null,
+      report.dropped ? `${report.dropped} wires to unmatched params dropped` : null,
       report.unsupported.length
         ? `Unsupported (${report.unsupported.length}): ${[...new Set(report.unsupported)].join(', ')}`
         : 'All components recognized',
@@ -935,3 +937,4 @@ document.getElementById('btn-zoom-ext').onclick = () => viewport.zoomExtents();
 window.__engine = engine;
 window.__viewport = viewport;
 window.__loadExample = loadExample;
+window.__parseGHX = parseGHX;

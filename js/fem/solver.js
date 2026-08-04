@@ -501,7 +501,7 @@ export function analyze(model) {
     const wGlobal = [0, 0, 0];
     const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2, z: (p0.z + p1.z) / 2 };
     for (const ll of model.lineLoads) {
-      if (!pointOnSegment(mid, ll.a, ll.b, 1e-3)) continue;
+      if (!ll.all && !pointOnSegment(mid, ll.a, ll.b, 1e-3)) continue;
       wGlobal[0] += ll.w[0]; wGlobal[1] += ll.w[1]; wGlobal[2] += ll.w[2];
       hasSpanLoad = true;
     }

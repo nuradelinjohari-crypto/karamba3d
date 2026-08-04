@@ -202,6 +202,160 @@ def({
   },
 });
 
+function numericBinop(type, name, nick, fn, defA = 0, defB = 0) {
+  def({
+    type, name, nick, category: 'Maths',
+    desc: `Mathematical ${name.toLowerCase()}.`,
+    inputs: [{ name: 'A', nick: 'A', default: defA }, { name: 'B', nick: 'B', default: defB }],
+    outputs: [{ name: 'Result', nick: 'R' }],
+    solve: (ins) => {
+      const n = Math.max(ins[0].length, ins[1].length, 1);
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const a = ins[0][Math.min(i, ins[0].length - 1)];
+        const b = ins[1][Math.min(i, ins[1].length - 1)];
+        out.push(fn(a, b));
+      }
+      return { Result: out };
+    },
+  });
+}
+
+const vec3 = (v) => (v && (v.kind === 'vector' || v.kind === 'point')) ? [v.x, v.y, v.z] : null;
+
+numericBinop('Addition', 'Addition', 'A+B', (a, b) => {
+  const va = vec3(a), vb = vec3(b);
+  if (va && vb) return { kind: a.kind === 'point' || b.kind === 'point' ? 'point' : 'vector', x: va[0] + vb[0], y: va[1] + vb[1], z: va[2] + vb[2] };
+  return num(a, 0) + num(b, 0);
+});
+numericBinop('Subtraction', 'Subtraction', 'A−B', (a, b) => {
+  const va = vec3(a), vb = vec3(b);
+  if (va && vb) return { kind: 'vector', x: va[0] - vb[0], y: va[1] - vb[1], z: va[2] - vb[2] };
+  return num(a, 0) - num(b, 0);
+});
+numericBinop('Division', 'Division', 'A÷B', (a, b) => {
+  const va = vec3(a);
+  const d = num(b, 1) || 1;
+  if (va) return { kind: a.kind, x: va[0] / d, y: va[1] / d, z: va[2] / d };
+  return num(a, 0) / d;
+}, 0, 1);
+
+def({
+  type: 'Negative', name: 'Negative', nick: '−x',
+  category: 'Maths',
+  desc: 'Compute the negative of a value (numbers and vectors).',
+  inputs: [{ name: 'Value', nick: 'x', default: 0 }],
+  outputs: [{ name: 'Result', nick: 'y' }],
+  solve: (ins) => ({
+    Result: ins[0].map(v => {
+      const vv = vec3(v);
+      if (vv) return { kind: v.kind, x: -vv[0], y: -vv[1], z: -vv[2] };
+      return -num(v, 0);
+    }),
+  }),
+});
+
+def({
+  type: 'Deconstruct', name: 'Deconstruct', nick: 'pDecon',
+  category: 'Maths',
+  desc: 'Deconstruct a point into its {x, y, z} coordinates.',
+  inputs: [{ name: 'Point', nick: 'P', required: true }],
+  outputs: [{ name: 'X component', nick: 'X' }, { name: 'Y component', nick: 'Y' }, { name: 'Z component', nick: 'Z' }],
+  solve: (ins) => {
+    const pts = ins[0].map(asPoint).filter(Boolean);
+    return {
+      'X component': pts.map(p => p.x),
+      'Y component': pts.map(p => p.y),
+      'Z component': pts.map(p => p.z),
+    };
+  },
+});
+
+def({
+  type: 'Move', name: 'Move', nick: 'Move',
+  category: 'Curve',
+  desc: 'Translate geometry along a vector (points, lines and meshes).',
+  inputs: [
+    { name: 'Geometry', nick: 'G', required: true },
+    { name: 'Motion', nick: 'T' },
+  ],
+  outputs: [{ name: 'Geometry', nick: 'G' }],
+  solve: (ins) => {
+    const t = ins[1].find(v => v && v.kind === 'vector') || V(0, 0, 0);
+    const mv = (p) => P(p.x + t.x, p.y + t.y, p.z + t.z);
+    return {
+      Geometry: ins[0].map(g => {
+        if (!g || typeof g !== 'object') return g;
+        if (g.kind === 'point') return mv(g);
+        if (g.kind === 'line') return LN(mv(g.a), mv(g.b));
+        if (g.kind === 'mesh') return { kind: 'mesh', vertices: g.vertices.map(v => [v[0] + t.x, v[1] + t.y, v[2] + t.z]), faces: g.faces };
+        return g;
+      }),
+    };
+  },
+});
+
+def({
+  type: 'PolyLineComp', name: 'PolyLine', nick: 'PLine',
+  category: 'Curve',
+  desc: 'Create a polyline through a list of vertex points (output as line segments).',
+  inputs: [
+    { name: 'Vertices', nick: 'V', required: true },
+    { name: 'Closed', nick: 'C', default: false },
+  ],
+  outputs: [{ name: 'Polyline', nick: 'Pl' }],
+  solve: (ins) => {
+    const pts = ins[0].map(asPoint).filter(Boolean);
+    const closed = !!(ins[1][0]);
+    const segs = [];
+    for (let i = 0; i < pts.length - 1; i++) segs.push(LN(pts[i], pts[i + 1]));
+    if (closed && pts.length > 2) segs.push(LN(pts[pts.length - 1], pts[0]));
+    return { Polyline: segs };
+  },
+});
+
+def({
+  type: 'Explode', name: 'Explode', nick: 'Explode',
+  category: 'Curve',
+  desc: 'Explode curves into segments and vertices.',
+  inputs: [{ name: 'Curve', nick: 'C', required: true }],
+  outputs: [{ name: 'Segments', nick: 'S' }, { name: 'Vertices', nick: 'V' }],
+  solve: (ins) => {
+    const lines = asLines(ins[0]);
+    const verts = [];
+    const seen = new Set();
+    for (const l of lines) for (const p of [l.a, l.b]) {
+      const k = `${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z.toFixed(4)}`;
+      if (!seen.has(k)) { seen.add(k); verts.push(p); }
+    }
+    return { Segments: lines, Vertices: verts };
+  },
+});
+
+def({
+  type: 'ListItem', name: 'List Item', nick: 'Item',
+  category: 'Maths',
+  desc: 'Retrieve a specific item from a list (wrapping indices).',
+  inputs: [
+    { name: 'List', nick: 'L', required: true },
+    { name: 'Index', nick: 'i', default: 0 },
+    { name: 'Wrap', nick: 'W', default: true },
+  ],
+  outputs: [{ name: 'Item', nick: 'i' }],
+  solve: (ins) => {
+    const list = ins[0];
+    if (!list.length) return { Item: [] };
+    const idx = ins[1].length ? ins[1] : [0];
+    return {
+      Item: idx.map(iv => {
+        let i = Math.round(num(iv, 0));
+        i = ((i % list.length) + list.length) % list.length;
+        return list[i];
+      }),
+    };
+  },
+});
+
 def({
   type: 'Multiplication', name: 'Multiplication', nick: 'A×B',
   category: 'Maths',
@@ -551,8 +705,9 @@ def({
 def({
   type: 'LineLoad', name: 'Line-Load (UDL)', nick: 'LLoad',
   category: 'Karamba3D|Load',
+  desc: 'Uniformly distributed load [kN/m]. With lines wired in it loads the beams on those lines; with no lines it applies to ALL elements (like Karamba with an empty Elems|Ids).',
   inputs: [
-    { name: 'Line', nick: 'Line', required: true },
+    { name: 'Line', nick: 'Line' },
     { name: 'Force [kN/m]', nick: 'Vec' },
   ],
   outputs: [{ name: 'Load', nick: 'Load' }],
@@ -560,10 +715,16 @@ def({
     const lines = asLines(ins[0]);
     const vecs = ins[1].filter(v => v && v.kind === 'vector');
     const loads = [];
-    lines.forEach((l, i) => {
-      const v = vecs[Math.min(i, vecs.length - 1)] || V(0, 0, -1);
-      loads.push({ kind: 'load', type: 'line', a: l.a, b: l.b, w: [v.x, v.y, v.z] });
-    });
+    if (!lines.length) {
+      // Karamba semantics: no element selection → the load acts on all elements
+      const v = vecs[0] || V(0, 0, -1);
+      loads.push({ kind: 'load', type: 'line', all: true, w: [v.x, v.y, v.z] });
+    } else {
+      lines.forEach((l, i) => {
+        const v = vecs[Math.min(i, vecs.length - 1)] || V(0, 0, -1);
+        loads.push({ kind: 'load', type: 'line', a: l.a, b: l.b, w: [v.x, v.y, v.z] });
+      });
+    }
     return { Load: loads };
   },
 });
@@ -748,7 +909,7 @@ function buildFem(modelVal) {
       const ni = fem.findClosestNode(l.pos, 0.03);
       if (ni >= 0) fem.pointLoads.push({ node: ni, force: l.force, moment: l.moment || null });
     } else if (l.type === 'line') {
-      fem.lineLoads.push({ a: l.a, b: l.b, w: l.w });
+      fem.lineLoads.push({ a: l.a, b: l.b, w: l.w, all: !!l.all });
     }
   }
   return fem;
@@ -1113,11 +1274,14 @@ export const COMPONENT_TABS = [
   },
   {
     tab: 'Maths',
-    groups: [{ name: 'Operators', items: ['Series', 'Multiplication'] }],
+    groups: [
+      { name: 'Operators', items: ['Addition', 'Subtraction', 'Multiplication', 'Division', 'Negative'] },
+      { name: 'Sets', items: ['Series', 'ListItem', 'Deconstruct'] },
+    ],
   },
   {
     tab: 'Curve',
-    groups: [{ name: 'Primitive', items: ['Line'] }],
+    groups: [{ name: 'Primitive', items: ['Line', 'Move', 'Explode'] }],
   },
   {
     tab: 'Karamba3D',
