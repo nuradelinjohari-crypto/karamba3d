@@ -803,6 +803,8 @@ export function formatValue(v) {
   if (v.kind === 'line') return `Line {${fmt(v.a.x)},${fmt(v.a.y)},${fmt(v.a.z)} → ${fmt(v.b.x)},${fmt(v.b.y)},${fmt(v.b.z)}}`;
   if (v.kind === 'vector') return `Vec {${fmt(v.x)}, ${fmt(v.y)}, ${fmt(v.z)}}`;
   if (v.kind === 'beam') return `Beam (${v.id || 'elem'})`;
+  if (v.kind === 'mesh') return `Mesh (${v.vertices.length}V ${v.faces.length}F)`;
+  if (v.kind === 'shell') return `Shell (${v.tris.length} tris, t=${v.t}cm)`;
   if (v.kind === 'support') return `Support @node`;
   if (v.kind === 'load') return `Load (${v.type})`;
   if (v.kind === 'crosec') return `CroSec: ${v.name}`;

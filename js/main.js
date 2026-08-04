@@ -40,8 +40,9 @@ function updateStatus(views) {
   const v = views.find(x => x.analysis);
   if (v && v.analysis.ok) {
     const a = v.analysis;
+    const nb = a.model.elements.length, ns = (a.model.shells || []).length;
     el.textContent =
-      `Analyzed: ${a.model.elements.length} elements · ${a.model.nodes.length} nodes · ` +
+      `Analyzed: ${nb ? nb + ' beams' : ''}${nb && ns ? ' · ' : ''}${ns ? ns + ' shell tris' : ''} · ${a.model.nodes.length} nodes · ` +
       `max disp ${(a.maxDisp * 100).toFixed(2)} cm · max utilization ${(a.maxUtil * 100).toFixed(1)}% · ` +
       `mass ${a.mass.toFixed(0)} kg`;
     el.style.color = a.maxUtil > 1 ? '#ff8080' : '#c8e6b0';
@@ -174,7 +175,7 @@ document.addEventListener('mousedown', e => {
 const MENUS = {
   File: [
     ['New Definition', () => { engine.nodes = []; engine.wires = []; engine.scheduleSolve(); }],
-    ['Import Model… (OBJ / DXF / JSON)', () => fileInput.click()],
+    ['Import Model… (3DM / OBJ / DXF / JSON)', () => fileInput.click()],
     ['—'],
     ['Save Definition (.ghjson)', saveDefinition],
     ['Open Definition…', () => defInput.click()],
@@ -197,6 +198,8 @@ const MENUS = {
     ['Parametric Truss Bridge', () => loadExample('truss')],
     ['3D Portal Frame Tower', () => loadExample('frame')],
     ['Simple Cantilever', () => loadExample('cantilever')],
+    ['Shell Canopy (Mesh → Shell)', () => loadExample('shell')],
+    ['Optimize Cross Section', () => loadExample('opticrosec')],
   ],
   Help: [
     ['About this replica', () => alert(
@@ -243,18 +246,21 @@ const defInput = document.getElementById('def-input');
 fileInput.addEventListener('change', async () => {
   const f = fileInput.files[0];
   if (!f) return;
-  const text = await f.text();
-  let lines = [];
+  let geo = { lines: [], meshes: [], points: [] };
   try {
-    if (/\.obj$/i.test(f.name)) lines = parseOBJ(text);
-    else if (/\.dxf$/i.test(f.name)) lines = parseDXF(text);
-    else lines = parseJSONModel(text);
+    if (/\.3dm$/i.test(f.name)) geo = await parse3dm(await f.arrayBuffer());
+    else if (/\.obj$/i.test(f.name)) geo = parseOBJ(await f.text());
+    else if (/\.dxf$/i.test(f.name)) geo = { lines: parseDXF(await f.text()), meshes: [], points: [] };
+    else geo = parseJSONModel(await f.text());
   } catch (err) {
     alert('Could not read file: ' + err.message);
     return;
   }
-  if (!lines.length) { alert('No line/edge geometry found in file.'); return; }
-  window.__importedGeometry = { name: f.name, lines };
+  if (!geo.lines.length && !geo.meshes.length && !geo.points.length) {
+    alert('No line, point or mesh geometry found in file.\nFor .3dm: keep curves/lines, points and meshes (breps/surfaces are skipped — Mesh them in Rhino first).');
+    return;
+  }
+  window.__importedGeometry = { name: f.name, ...geo };
   let node = engine.nodes.find(n => n.type === 'ImportGeometry');
   if (!node) {
     const r = canvas.getBoundingClientRect();
@@ -270,6 +276,7 @@ fileInput.addEventListener('change', async () => {
 function parseOBJ(text) {
   const verts = [];
   const lines = [];
+  const faces = [];
   const seen = new Set();
   const addEdge = (a, b) => {
     if (!verts[a] || !verts[b]) return;
@@ -286,10 +293,84 @@ function parseOBJ(text) {
       for (let i = 0; i < idx.length - 1; i++) addEdge(idx[i], idx[i + 1]);
     } else if (p[0] === 'f') {
       const idx = p.slice(1).map(s => parseInt(s.split('/')[0]) - 1);
-      for (let i = 0; i < idx.length; i++) addEdge(idx[i], idx[(i + 1) % idx.length]);
+      // fan-triangulate polygons into mesh faces
+      for (let i = 1; i < idx.length - 1; i++) faces.push([idx[0], idx[i], idx[i + 1]]);
     }
   }
-  return lines;
+  const meshes = faces.length ? [{ vertices: verts, faces }] : [];
+  return { lines, meshes, points: [] };
+}
+
+/* ---- .3dm (Rhino) via rhino3dm wasm ---- */
+
+let rhino3dmPromise = null;
+function loadRhino3dm() {
+  if (!rhino3dmPromise) {
+    rhino3dmPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'lib/rhino3dm/rhino3dm.min.js';
+      s.onload = () => window.rhino3dm({ locateFile: (f) => 'lib/rhino3dm/' + f }).then(resolve, reject);
+      s.onerror = () => reject(new Error('could not load rhino3dm library'));
+      document.head.appendChild(s);
+    });
+  }
+  return rhino3dmPromise;
+}
+
+const pt3 = (v) => (Array.isArray(v) ? v : [v[0] ?? v.x ?? 0, v[1] ?? v.y ?? 0, v[2] ?? v.z ?? 0]);
+
+async function parse3dm(buffer) {
+  const rh = await loadRhino3dm();
+  const doc = rh.File3dm.fromByteArray(new Uint8Array(buffer));
+  if (!doc) throw new Error('not a valid Rhino .3dm file');
+  const lines = [], meshes = [], points = [];
+  let skipped = 0;
+  const objs = doc.objects();
+  for (let i = 0; i < objs.count; i++) {
+    let geom;
+    try { geom = objs.get(i).geometry(); } catch { continue; }
+    if (!geom) continue;
+    try {
+      if (geom instanceof rh.Point) {
+        points.push(pt3(geom.location));
+      } else if (geom instanceof rh.LineCurve) {
+        const a = typeof geom.pointAtStart === 'function' ? geom.pointAtStart() : geom.pointAtStart;
+        const b = typeof geom.pointAtEnd === 'function' ? geom.pointAtEnd() : geom.pointAtEnd;
+        lines.push([pt3(a), pt3(b)]);
+      } else if (geom instanceof rh.PolylineCurve) {
+        const nPts = geom.pointCount;
+        for (let k = 0; k < nPts - 1; k++)
+          lines.push([pt3(geom.point(k)), pt3(geom.point(k + 1))]);
+      } else if (geom instanceof rh.Mesh) {
+        const vl = geom.vertices(), fl = geom.faces();
+        const vertices = [];
+        for (let k = 0; k < vl.count; k++) vertices.push(pt3(vl.get(k)));
+        const faces = [];
+        for (let k = 0; k < fl.count; k++) {
+          const f = fl.get(k);
+          if (f[2] !== f[3]) faces.push([f[0], f[1], f[2]], [f[0], f[2], f[3]]);
+          else faces.push([f[0], f[1], f[2]]);
+        }
+        meshes.push({ vertices, faces });
+      } else if (geom instanceof rh.Curve) {
+        // arcs, nurbs, polycurves… sample into segments
+        const dom = geom.domain;
+        const t0 = dom[0] ?? dom.t0 ?? 0, t1 = dom[1] ?? dom.t1 ?? 1;
+        const N = 16;
+        let prev = pt3(geom.pointAt(t0));
+        for (let k = 1; k <= N; k++) {
+          const p = pt3(geom.pointAt(t0 + (t1 - t0) * k / N));
+          lines.push([prev, p]);
+          prev = p;
+        }
+      } else {
+        skipped++;
+      }
+    } catch { skipped++; }
+  }
+  if (doc.delete) doc.delete();
+  if (skipped) console.warn(`3dm import: skipped ${skipped} unsupported objects (breps/surfaces — mesh them in Rhino first)`);
+  return { lines, meshes, points };
 }
 
 function parseDXF(text) {
@@ -312,9 +393,12 @@ function parseDXF(text) {
 
 function parseJSONModel(text) {
   const data = JSON.parse(text);
-  if (Array.isArray(data.lines)) return data.lines;
-  if (Array.isArray(data)) return data;
-  throw new Error('Expected {"lines": [[[x,y,z],[x,y,z]], …]}');
+  if (Array.isArray(data)) return { lines: data, meshes: [], points: [] };
+  return {
+    lines: data.lines || [],
+    meshes: data.meshes || [],
+    points: data.points || [],
+  };
 }
 
 /* ================= definition save/load ================= */
@@ -463,6 +547,77 @@ function loadExample(which) {
     W(ana, 1, p1, 0);
   }
 
+  if (which === 'shell') {
+    const sx = N('NumberSlider', 30, 40, { name: 'Span X', min: 4, max: 20, step: 0.5, value: 12 });
+    const sy = N('NumberSlider', 30, 80, { name: 'Span Y', min: 4, max: 20, step: 0.5, value: 9 });
+    const sr = N('NumberSlider', 30, 120, { name: 'Rise', min: 0.5, max: 6, step: 0.25, value: 2.5 });
+    const sd = N('NumberSlider', 30, 160, { name: 'Divisions', min: 4, max: 18, step: 1, value: 10 });
+    const canopy = N('ShellCanopy', 250, 80);
+    W(sx, 0, canopy, 0); W(sy, 0, canopy, 1); W(sr, 0, canopy, 2); W(sd, 0, canopy, 3);
+
+    const st = N('NumberSlider', 30, 230, { name: 'Thick cm', min: 5, max: 40, step: 1, value: 12 });
+    const mat = N('MatSelect', 30, 270, { index: 2 });   // Concrete C30/37
+    const shc = N('ShellConst', 250, 240);
+    W(st, 0, shc, 0); W(mat, 0, shc, 1);
+
+    const mtos = N('MeshToShell', 440, 90);
+    W(canopy, 0, mtos, 0); W(shc, 0, mtos, 2);
+
+    const supp = N('Support', 440, 220, { fix: [true, true, true, false, false, false] });
+    W(canopy, 1, supp, 0);
+    const grav = N('Gravity', 440, 350);
+
+    const ass = N('Assemble', 620, 150);
+    W(mtos, 0, ass, 0); W(supp, 0, ass, 1); W(grav, 0, ass, 2);
+    const ana = N('AnalyzeThI', 790, 150);
+    W(ass, 0, ana, 0);
+    const defS = N('NumberSlider', 620, 330, { name: 'Def Scale', min: 0, max: 500, step: 5, value: 100 });
+    const bview = N('BeamView', 950, 150);
+    W(ana, 0, bview, 0); W(defS, 0, bview, 1);
+    const p1 = N('Panel', 950, 280, { w: 155, h: 60 });
+    W(ana, 1, p1, 0);
+    const p2 = N('Panel', 950, 360, { w: 155, h: 60 });
+    W(ass, 2, p2, 0);
+  }
+
+  if (which === 'opticrosec') {
+    const sx = N('NumberSlider', 30, 40, { name: 'Width X', min: 3, max: 16, step: 0.5, value: 9 });
+    const sy = N('NumberSlider', 30, 80, { name: 'Width Y', min: 3, max: 16, step: 0.5, value: 7 });
+    const sh2 = N('NumberSlider', 30, 120, { name: 'Storey H', min: 2.5, max: 6, step: 0.25, value: 3.5 });
+    const sn = N('NumberSlider', 30, 160, { name: 'Storeys', min: 1, max: 8, step: 1, value: 4 });
+    const frame = N('PortalFrame', 250, 80);
+    W(sx, 0, frame, 0); W(sy, 0, frame, 1); W(sh2, 0, frame, 2); W(sn, 0, frame, 3);
+
+    const ltob = N('LineToBeam', 440, 80);
+    W(frame, 2, ltob, 0);
+    const supp = N('Support', 440, 200, { fix: [true, true, true, true, true, true] });
+    W(frame, 3, supp, 0);
+
+    // wind as UDL on the columns + gravity
+    const wvec = N('VectorXYZ', 250, 330);
+    const wkn = N('NumberSlider', 30, 340, { name: 'Wind kN/m', min: 0, max: 15, step: 0.5, value: 4 });
+    W(wkn, 0, wvec, 0);
+    const lload = N('LineLoad', 440, 320);
+    W(frame, 0, lload, 0); W(wvec, 0, lload, 1);
+    const grav = N('Gravity', 440, 410);
+
+    const ass = N('Assemble', 620, 150);
+    W(ltob, 0, ass, 0); W(supp, 0, ass, 1); W(lload, 0, ass, 2); W(grav, 0, ass, 2);
+
+    const range = N('CroSecRange', 620, 280, { index: 0 });   // IPE family
+    const maxu = N('NumberSlider', 620, 320, { name: 'MaxUtil', min: 0.2, max: 1.2, step: 0.05, value: 0.8 });
+    const opti = N('OptiCroSec', 800, 150);
+    W(ass, 0, opti, 0); W(range, 0, opti, 1); W(maxu, 0, opti, 2);
+
+    const defS = N('NumberSlider', 800, 330, { name: 'Def Scale', min: 0, max: 500, step: 5, value: 50 });
+    const bview = N('BeamView', 985, 150);
+    W(opti, 0, bview, 0); W(defS, 0, bview, 1);
+    const p1 = N('Panel', 985, 280, { w: 210, h: 74 });
+    W(opti, 1, p1, 0);
+    const p2 = N('Panel', 985, 375, { w: 210, h: 46 });
+    W(opti, 2, p2, 0);
+  }
+
   setTimeout(() => { engine.zoomExtents(); viewport.zoomExtents(); }, 150);
 }
 
@@ -471,3 +626,8 @@ function loadExample(which) {
 buildRibbon();
 loadExample('truss');
 document.getElementById('btn-zoom-ext').onclick = () => viewport.zoomExtents();
+
+// exposed for debugging / testing
+window.__engine = engine;
+window.__viewport = viewport;
+window.__loadExample = loadExample;

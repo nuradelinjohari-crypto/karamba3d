@@ -26,9 +26,11 @@ python3 -m http.server 8642
 | Piece | File | What it replicates |
 |---|---|---|
 | GH node editor | `js/graph/engine.js` | Canvas, wires (fancy-wire list rendering), sliders, panels, toggles, search popup, box select, pan/zoom |
-| Karamba components | `js/graph/components.js` | Line To Beam, Support (6-DOF checkboxes), Point-Load, Gravity, Cross Sections (Rect / CHS / I / Selector with IPE-HEA-CHS table), Material Selection (S235 default), Assemble Model, Analyze Th.I, Disassemble, ModelView, BeamView, Nodal Displacements, Reaction Forces, Utilization, Beam Resultant Forces |
-| FEM solver | `js/fem/solver.js` | Linear-elastic first-order (Th.I) 3D frame analysis: Euler-Bernoulli beams, 12×12 element stiffness, 6 DOF/node, supports, point loads + gravity, LDLᵀ solve, member forces, σ/fy utilization, reactions, mass |
-| Rhino viewport | `js/viewport/viewport.js` | Perspective view, grid + axes, world-axes icon, shaded display, deformed model, rainbow legend blue→red |
+| Karamba components | `js/graph/components.js` | Line To Beam, **Mesh To Shell**, Support (6-DOF checkboxes), Point-Load, **Line-Load (UDL)**, Gravity, Cross Sections (Rect / CHS / I / Selector / **Range Selector** / **Shell Const**), Material Selection (S235 default), Assemble Model, Analyze Th.I, **Optimize Cross Section**, Disassemble, ModelView, BeamView, Nodal Displacements, Reaction Forces, Utilization, Beam Resultant Forces |
+| FEM solver | `js/fem/solver.js` | Linear-elastic first-order (Th.I) analysis: Euler-Bernoulli 3D beams (12×12 stiffness) **+ flat triangular shells (CST membrane + DKT plate bending, Batoz)**, 6 DOF/node, supports, point loads, **uniform line loads via fixed-end forces**, gravity, LDLᵀ solve, member forces, σ/fy & von-Mises utilization, reactions, mass. Validated against closed-form beam/plate solutions (see `scratchpad` tests) |
+| Cross-section optimizer | `js/fem/solver.js` | Karamba's OptiCroSec loop: analyze → re-size each member to the lightest catalogue section with util ≤ target → re-analyze until stable |
+| Rhino viewport | `js/viewport/viewport.js` | Perspective view, grid + axes, world-axes icon, shaded display, deformed beams **and shells**, rainbow legend blue→red |
+| .3dm import | `lib/rhino3dm/` + `js/main.js` | McNeel's official **rhino3dm** WebAssembly library — upload native Rhino files: lines/polylines/curves → beams, meshes → shells, points |
 
 ### Units (Karamba conventions)
 Geometry **m** · cross-section dims **cm** · forces **kN** · moments **kNm** ·
@@ -44,16 +46,22 @@ beam section **CHS Ø 114.3 × 4 mm** when nothing is wired in.
 2. Drag any **slider** — the whole pipeline re-solves live and the viewport updates.
 3. **Double-click** empty canvas → search popup → place components; drag from an output
    nub to an input nub to wire them.
-4. **File → Import Model…** to upload your own geometry as **OBJ** (line/face edges),
-   **DXF** (LINE entities) or **JSON** (`{"lines": [[[x,y,z],[x,y,z]], …]}`), then wire
-   the *Import Geometry* component into *Line To Beam*.
+4. **File → Import Model…** to upload your own design:
+   - **`.3dm` (Rhino)** — the native format. Lines/polylines/arcs/NURBS curves become
+     beam axes, meshes become shells, points come through as points. Breps/surfaces are
+     skipped — run `Mesh` on them in Rhino first. Model in **meters**.
+   - **`.obj`** — `l` line entities and face wireframes → beams; `f` faces → shell mesh.
+   - **`.dxf`** — LINE entities.
+   - **`.json`** — `{"lines": [[[x,y,z],[x,y,z]],…], "meshes":[{"vertices":[…],"faces":[…]}]}`.
+   Then wire *Import ▸ Lines → Line To Beam* and/or *Import ▸ Mesh → Mesh To Shell*.
 5. Right-drag = pan canvas / orbit viewport · Shift+drag = pan viewport · wheel = zoom.
 6. **File → Save Definition** exports the graph as `.ghjson`; reload it any time.
 
 ## Honest scope
 
-This is a study/teaching replica, not the real thing: beams only (no shells yet),
-one load case, first-order theory, simple σ/fy utilization (no EC3 buckling checks).
+This is a study/teaching replica, not the real thing: one load case, first-order
+theory, simple σ/fy (beams) and von-Mises/fy (shells) utilization — no EC3 buckling
+or lateral-torsional checks, no Th.II, no eigenmodes.
 Not affiliated with or endorsed by Karamba GmbH — if you need real structural analysis,
 [buy Karamba3D](https://karamba3d.com/); it's superb.
 

@@ -9,7 +9,7 @@
  */
 
 import {
-  FemModel, analyze, MATERIALS, CROSEC_TABLE,
+  FemModel, analyze, optimizeCroSec, MATERIALS, CROSEC_TABLE, CROSEC_FAMILIES,
   rectangleCroSec, circleCroSec, iCroSec, DEFAULT_CROSEC, DEFAULT_MATERIAL,
 } from '../fem/solver.js';
 
@@ -171,22 +171,34 @@ def({
   type: 'ImportGeometry', name: 'Import Geometry', nick: 'Import',
   category: 'Params',
   inputs: [],
-  outputs: [{ name: 'Lines', nick: 'L' }, { name: 'Points', nick: 'P' }, { name: 'Info', nick: 'I' }],
+  outputs: [
+    { name: 'Lines', nick: 'L' }, { name: 'Points', nick: 'P' },
+    { name: 'Mesh', nick: 'M' }, { name: 'Info', nick: 'I' },
+  ],
   defaultState: () => ({ fileName: null }),
   solve: (ins, node) => {
     const g = window.__importedGeometry;
-    if (!g || !g.lines || !g.lines.length) {
-      return { Lines: [], Points: [], Info: ['No file imported yet — use File ▸ Import Model…'] };
+    if (!g || ((!g.lines || !g.lines.length) && (!g.meshes || !g.meshes.length) && (!g.points || !g.points.length))) {
+      return { Lines: [], Points: [], Mesh: [], Info: ['No file imported yet — use File ▸ Import Model… (.3dm / .obj / .dxf / .json)'] };
     }
     node.state.fileName = g.name;
-    const lines = g.lines.map(l => LN(P(l[0][0], l[0][1], l[0][2]), P(l[1][0], l[1][1], l[1][2])));
+    const lines = (g.lines || []).map(l => LN(P(l[0][0], l[0][1], l[0][2]), P(l[1][0], l[1][1], l[1][2])));
     const pts = [];
     const seen = new Set();
     for (const l of lines) for (const p of [l.a, l.b]) {
       const k = `${p.x},${p.y},${p.z}`;
       if (!seen.has(k)) { seen.add(k); pts.push(p); }
     }
-    return { Lines: lines, Points: pts, Info: [`${g.name}: ${lines.length} lines, ${pts.length} nodes`] };
+    for (const p of (g.points || [])) {
+      const k = `${p[0]},${p[1]},${p[2]}`;
+      if (!seen.has(k)) { seen.add(k); pts.push(P(p[0], p[1], p[2])); }
+    }
+    const meshes = (g.meshes || []).map(m => ({ kind: 'mesh', vertices: m.vertices, faces: m.faces }));
+    const nFaces = meshes.reduce((s, m) => s + m.faces.length, 0);
+    return {
+      Lines: lines, Points: pts, Mesh: meshes,
+      Info: [`${g.name}: ${lines.length} lines, ${pts.length} points, ${meshes.length} meshes (${nFaces} faces)`],
+    };
   },
 });
 
@@ -267,6 +279,45 @@ def({
   },
 });
 
+def({
+  type: 'ShellCanopy', name: 'Shell Canopy', nick: 'Canopy',
+  category: 'Karamba3D|Utils',
+  inputs: [
+    { name: 'Span X', nick: 'X', default: 10 },
+    { name: 'Span Y', nick: 'Y', default: 8 },
+    { name: 'Rise', nick: 'R', default: 2 },
+    { name: 'Divisions', nick: 'Div', default: 10 },
+  ],
+  outputs: [
+    { name: 'Mesh', nick: 'M' },
+    { name: 'Corner Points', nick: 'CPt' },
+    { name: 'Center Point', nick: 'MPt' },
+  ],
+  solve: (ins) => {
+    const LX = Math.max(num(ins[0][0], 10), 0.5), LY = Math.max(num(ins[1][0], 8), 0.5);
+    const R = num(ins[2][0], 2);
+    const N = Math.max(3, Math.min(24, Math.round(num(ins[3][0], 10))));
+    const vertices = [], faces = [];
+    // elliptic-paraboloid canopy: z = R·(1−u²)(1−v²), corners on the ground
+    const idx = (i, j) => i * (N + 1) + j;
+    for (let i = 0; i <= N; i++)
+      for (let j = 0; j <= N; j++) {
+        const u = 2 * i / N - 1, v = 2 * j / N - 1;
+        vertices.push([(u + 1) / 2 * LX, (v + 1) / 2 * LY, R * (1 - u * u) * (1 - v * v)]);
+      }
+    for (let i = 0; i < N; i++)
+      for (let j = 0; j < N; j++) {
+        faces.push([idx(i, j), idx(i + 1, j), idx(i + 1, j + 1)]);
+        faces.push([idx(i, j), idx(i + 1, j + 1), idx(i, j + 1)]);
+      }
+    return {
+      Mesh: [{ kind: 'mesh', vertices, faces }],
+      'Corner Points': [P(0, 0, 0), P(LX, 0, 0), P(LX, LY, 0), P(0, LY, 0)],
+      'Center Point': [P(LX / 2, LY / 2, R)],
+    };
+  },
+});
+
 /* ================= Karamba3D: 1. Model ================= */
 
 def({
@@ -339,6 +390,38 @@ def({
   },
 });
 
+def({
+  type: 'MeshToShell', name: 'Mesh To Shell', nick: 'MtoS',
+  category: 'Karamba3D|Model',
+  inputs: [
+    { name: 'Mesh', nick: 'Mesh', required: true },
+    { name: 'Identifier', nick: 'Id', default: '' },
+    { name: 'CroSec', nick: 'CroSec' },
+  ],
+  outputs: [{ name: 'Elem', nick: 'Elem' }, { name: 'Info', nick: 'Info' }],
+  solve: (ins) => {
+    const meshes = ins[0].filter(v => v && v.kind === 'mesh');
+    const id = ins[1][0] || '';
+    const cs = ins[2].find(c => c && c.kind === 'crosec' && c.shell);
+    const t = cs ? cs.t : 1;                  // Karamba default shell: 1 cm
+    const mat = cs?.materialName || null;
+    const shells = [];
+    let nTris = 0;
+    for (const m of meshes) {
+      const tris = [];
+      for (const f of m.faces) {
+        // split quads
+        if (f.length >= 4 && f[2] !== f[3]) {
+          tris.push([f[0], f[1], f[2]], [f[0], f[2], f[3]]);
+        } else tris.push([f[0], f[1], f[2]]);
+      }
+      nTris += tris.length;
+      shells.push({ kind: 'shell', vertices: m.vertices, tris, t, material: mat, id: id || 'shell' });
+    }
+    return { Elem: shells, Info: [`${shells.length} shells (${nTris} triangles, t = ${t} cm)`] };
+  },
+});
+
 /* ================= Karamba3D: 2. Load ================= */
 
 def({
@@ -367,6 +450,26 @@ def({
       });
       i++;
     }
+    return { Load: loads };
+  },
+});
+
+def({
+  type: 'LineLoad', name: 'Line-Load (UDL)', nick: 'LLoad',
+  category: 'Karamba3D|Load',
+  inputs: [
+    { name: 'Line', nick: 'Line', required: true },
+    { name: 'Force [kN/m]', nick: 'Vec' },
+  ],
+  outputs: [{ name: 'Load', nick: 'Load' }],
+  solve: (ins) => {
+    const lines = asLines(ins[0]);
+    const vecs = ins[1].filter(v => v && v.kind === 'vector');
+    const loads = [];
+    lines.forEach((l, i) => {
+      const v = vecs[Math.min(i, vecs.length - 1)] || V(0, 0, -1);
+      loads.push({ kind: 'load', type: 'line', a: l.a, b: l.b, w: [v.x, v.y, v.z] });
+    });
     return { Load: loads };
   },
 });
@@ -439,6 +542,38 @@ def({
 });
 
 def({
+  type: 'ShellConst', name: 'Shell Cross Section (Const)', nick: 'ShellConst',
+  category: 'Karamba3D|CroSec',
+  inputs: [
+    { name: 'Height [cm]', nick: 'H', default: 1 },
+    { name: 'Material', nick: 'Mat' },
+  ],
+  outputs: [{ name: 'CroSec', nick: 'CroSec' }],
+  solve: (ins) => {
+    const t = Math.max(num(ins[0][0], 1), 0.05);
+    const mat = ins[1].find(m => m && m.kind === 'material');
+    return { CroSec: [{ kind: 'crosec', shell: true, t, name: `Shell t=${t}cm`, materialName: mat?.name || null }] };
+  },
+});
+
+def({
+  type: 'CroSecRange', name: 'Cross Section Range Selector', nick: 'CroSecRange',
+  category: 'Karamba3D|CroSec', layout: 'valuelist',
+  inputs: [], outputs: [{ name: 'CroSecs', nick: 'CS' }],
+  defaultState: () => ({ items: Object.keys(CROSEC_FAMILIES), index: 0 }),
+  onClick(node, wx) {
+    const n = node.state.items.length;
+    if (wx < node.x + node.w * 0.35) node.state.index = (node.state.index - 1 + n) % n;
+    else node.state.index = (node.state.index + 1) % n;
+    return true;
+  },
+  solve: (ins, node) => {
+    const fam = node.state.items[node.state.index];
+    return { CroSecs: CROSEC_FAMILIES[fam].map(cs => crosecValue(cs)) };
+  },
+});
+
+def({
   type: 'CroSecSelect', name: 'Cross Section Selector', nick: 'CroSecSel',
   category: 'Karamba3D|CroSec', layout: 'valuelist',
   inputs: [], outputs: [{ name: 'CroSec', nick: 'CS' }],
@@ -499,6 +634,16 @@ function buildFem(modelVal) {
     const mat = b.material || modelVal.defaultMaterial || DEFAULT_MATERIAL;
     fem.addBeam(b.line.a, b.line.b, cs, mat, b.id);
   }
+  for (const sh of modelVal.shellElems || []) {
+    const mat = sh.material || modelVal.defaultMaterial || DEFAULT_MATERIAL;
+    for (const tri of sh.tris) {
+      const p = tri.map(i => {
+        const v = sh.vertices[i];
+        return { x: v[0], y: v[1], z: v[2] };
+      });
+      fem.addShellTri(p[0], p[1], p[2], sh.t, mat, sh.id);
+    }
+  }
   for (const s of modelVal.supports) {
     const ni = fem.findClosestNode(s.pos, 1e-3);
     if (ni >= 0) fem.supports.push({ node: ni, fix: s.fix.map(b => b ? 1 : 0) });
@@ -508,9 +653,24 @@ function buildFem(modelVal) {
     else if (l.type === 'point') {
       const ni = fem.findClosestNode(l.pos, 1e-3);
       if (ni >= 0) fem.pointLoads.push({ node: ni, force: l.force, moment: l.moment || null });
+    } else if (l.type === 'line') {
+      fem.lineLoads.push({ a: l.a, b: l.b, w: l.w });
     }
   }
   return fem;
+}
+
+/** Shallow-clone a FemModel so an optimizer can mutate element cross sections safely. */
+function cloneFem(fem) {
+  const c = new FemModel();
+  c.nodes = fem.nodes;
+  c.elements = fem.elements.map(e => ({ ...e }));
+  c.shells = fem.shells;
+  c.supports = fem.supports;
+  c.pointLoads = fem.pointLoads;
+  c.lineLoads = fem.lineLoads;
+  c.gravity = fem.gravity;
+  return c;
 }
 
 def({
@@ -529,13 +689,14 @@ def({
   ],
   solve: (ins) => {
     const beams = ins[0].filter(v => v && v.kind === 'beam');
+    const shellElems = ins[0].filter(v => v && v.kind === 'shell');
     const supports = ins[1].filter(v => v && v.kind === 'support');
     const loads = ins[2].filter(v => v && v.kind === 'load');
-    const defaultCroSec = ins[3].find(v => v && v.kind === 'crosec') || null;
+    const defaultCroSec = ins[3].find(v => v && v.kind === 'crosec' && !v.shell) || null;
     const defaultMaterial = (ins[4].find(v => v && v.kind === 'material') || {}).name || null;
-    if (!beams.length) throw new Error('No elements to assemble');
+    if (!beams.length && !shellElems.length) throw new Error('No elements to assemble');
 
-    const modelVal = { kind: 'model', beams, supports, loads, defaultCroSec, defaultMaterial };
+    const modelVal = { kind: 'model', beams, shellElems, supports, loads, defaultCroSec, defaultMaterial };
     const fem = buildFem(modelVal);
     modelVal.fem = fem;
     modelVal.elements = fem.elements;
@@ -552,8 +713,20 @@ def({
       mass += w;
       cx += w * (p0.x + p1.x) / 2; cy += w * (p0.y + p1.y) / 2; cz += w * (p0.z + p1.z) / 2;
     }
+    // include shell mass
+    for (const sh of fem.shells) {
+      const p0 = fem.nodes[sh.n0], p1 = fem.nodes[sh.n1], p2 = fem.nodes[sh.n2];
+      const v1 = [p1.x - p0.x, p1.y - p0.y, p1.z - p0.z];
+      const v2 = [p2.x - p0.x, p2.y - p0.y, p2.z - p0.z];
+      const cx2 = [v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]];
+      const area = Math.hypot(...cx2) / 2;
+      const mat = MATERIALS[sh.material] || MATERIALS[DEFAULT_MATERIAL];
+      const w = mat.gamma * (sh.t / 100) * area / 9.80665 * 1000;
+      mass += w;
+      cx += w * (p0.x + p1.x + p2.x) / 3; cy += w * (p0.y + p1.y + p2.y) / 3; cz += w * (p0.z + p1.z + p2.z) / 3;
+    }
     const cog = mass > 0 ? P(cx / mass, cy / mass, cz / mass) : P(0, 0, 0);
-    const info = `${fem.elements.length} elements | ${fem.nodes.length} nodes | ${supports.length} supports | ${loads.length} loads`;
+    const info = `${fem.elements.length} beams | ${fem.shells.length} shell tris | ${fem.nodes.length} nodes | ${supports.length} supports | ${loads.length} loads`;
     return { Model: [modelVal], Info: [info], 'Mass [kg]': [mass], COG: [cog] };
   },
 });
@@ -583,6 +756,50 @@ def({
       'Gravity Force [kN]': [g],
       'Elastic Energy [kNm]': [res.elasticEnergy],
       Info: [`max u = ${(res.maxDisp * 100).toFixed(3)} cm | max util = ${(res.maxUtil * 100).toFixed(1)}%`],
+    };
+  },
+});
+
+def({
+  type: 'OptiCroSec', name: 'Optimize Cross Section', nick: 'OptiCroSec',
+  category: 'Karamba3D|Algorithms',
+  inputs: [
+    { name: 'Model', nick: 'Model', required: true },
+    { name: 'CroSecs', nick: 'CroSecs' },
+    { name: 'Max Utilization', nick: 'MaxUtil', default: 1.0 },
+    { name: 'Iterations', nick: 'Iter', default: 5 },
+  ],
+  outputs: [
+    { name: 'Model', nick: 'Model' },
+    { name: 'Info', nick: 'Info' },
+    { name: 'Mass [kg]', nick: 'Mass' },
+    { name: 'Max Utilization', nick: 'MaxUtil' },
+  ],
+  solve: (ins) => {
+    const mv = ins[0].find(v => v && v.kind === 'model');
+    if (!mv) return { Model: [], Info: [], 'Mass [kg]': [], 'Max Utilization': [] };
+    let candidates = ins[1].filter(v => v && v.kind === 'crosec' && !v.shell).map(c => c.data);
+    if (!candidates.length) candidates = CROSEC_FAMILIES['All'];
+    const maxUtil = Math.max(0.05, num(ins[2][0], 1.0));
+    const iter = Math.max(1, Math.min(20, Math.round(num(ins[3][0], 5))));
+
+    const fem = cloneFem(mv.fem);
+    const res = optimizeCroSec(fem, candidates, maxUtil, iter);
+    if (!res.ok) throw new Error(res.error);
+    // synthesize an analysis value like AnalyzeThI's, on the optimized model
+    const optModelVal = { ...mv, fem };
+    const out = { kind: 'analysis', ...res, sourceModel: optModelVal };
+    const secCount = {};
+    for (const el of fem.elements) {
+      const nm = (el.crosec && el.crosec.name) || 'default';
+      secCount[nm] = (secCount[nm] || 0) + 1;
+    }
+    const secSummary = Object.entries(secCount).map(([k, v]) => `${k}×${v}`).join(', ');
+    return {
+      Model: [out],
+      Info: [`optimized (${res.changed} swaps) → ${secSummary} | max util ${(res.maxUtil * 100).toFixed(1)}%`],
+      'Mass [kg]': [res.mass],
+      'Max Utilization': [res.maxUtil],
     };
   },
 });
@@ -764,13 +981,13 @@ export const COMPONENT_TABS = [
   {
     tab: 'Karamba3D',
     groups: [
-      { name: '1.Model', items: ['LineToBeam', 'Support', 'Assemble', 'Disassemble'] },
-      { name: '2.Load', items: ['PointLoad', 'Gravity'] },
-      { name: '3.Cross Section', items: ['CroSecRect', 'CroSecCircle', 'CroSecI', 'CroSecSelect'] },
+      { name: '1.Model', items: ['LineToBeam', 'MeshToShell', 'Support', 'Assemble', 'Disassemble'] },
+      { name: '2.Load', items: ['PointLoad', 'LineLoad', 'Gravity'] },
+      { name: '3.Cross Section', items: ['CroSecRect', 'CroSecCircle', 'CroSecI', 'CroSecSelect', 'CroSecRange', 'ShellConst'] },
       { name: '4.Material', items: ['MatSelect', 'MatProps'] },
-      { name: '5.Algorithms', items: ['AnalyzeThI'] },
+      { name: '5.Algorithms', items: ['AnalyzeThI', 'OptiCroSec'] },
       { name: '6.Results', items: ['ModelView', 'BeamView', 'NodalDisp', 'ReactionForces', 'Utilization', 'BeamForces'] },
-      { name: 'Utils', items: ['TrussGenerator', 'PortalFrame'] },
+      { name: 'Utils', items: ['TrussGenerator', 'PortalFrame', 'ShellCanopy'] },
     ],
   },
 ];

@@ -204,6 +204,10 @@ export class Viewport {
       g.setAttribute('position', new THREE.Float32BufferAttribute(lineVerts, 3));
       this.modelGroup.add(new THREE.LineSegments(g, previewMat));
     }
+    // mesh previews — GH-style shaded maroon-ish with wireframe
+    for (const v of previews) {
+      if (v && v.kind === 'mesh') this._drawMeshPreview(v);
+    }
 
     for (const view of views) {
       if (view.analysis) legend = this._drawAnalyzed(view) || legend;
@@ -225,6 +229,25 @@ export class Viewport {
     return mesh;
   }
 
+  _drawMeshPreview(v) {
+    const g = new THREE.BufferGeometry();
+    const pos = [];
+    for (const f of v.faces) {
+      const tris = (f.length >= 4 && f[2] !== f[3])
+        ? [[f[0], f[1], f[2]], [f[0], f[2], f[3]]] : [[f[0], f[1], f[2]]];
+      for (const t of tris)
+        for (const i of t) pos.push(v.vertices[i][0], v.vertices[i][1], v.vertices[i][2]);
+    }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+      color: 0xb05a5a, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+    this.modelGroup.add(mesh);
+    const wf = new THREE.LineSegments(new THREE.WireframeGeometry(g),
+      new THREE.LineBasicMaterial({ color: 0x5a2323, transparent: true, opacity: 0.3 }));
+    this.modelGroup.add(wf);
+  }
+
   _drawModel(model, color) {
     const fem = model.fem;
     if (!fem) return;
@@ -234,8 +257,36 @@ export class Viewport {
       const m = this._beamMesh(p0, p1, r, color);
       if (m) this.modelGroup.add(m);
     }
+    if (fem.shells.length) {
+      const pos = fem.nodes.map(n => [n.x, n.y, n.z]);
+      this._drawShellTris(fem.shells.map(sh => ({ nodesIdx: [sh.n0, sh.n1, sh.n2] })),
+        pos, null, 0, 0, () => new THREE.Color(color));
+    }
     this._drawSupports(model, fem.nodes.map(n => [n.x, n.y, n.z]));
     this._drawLoads(model);
+  }
+
+  /** Draw shell triangles with per-face colors. colorFn(i) → THREE.Color */
+  _drawShellTris(shellResults, nodePos, _a, _b, _c, colorFn) {
+    const pos = [], col = [];
+    shellResults.forEach((sr, i) => {
+      const c = colorFn(i);
+      for (const ni of sr.nodesIdx) {
+        const p = nodePos[ni];
+        pos.push(p[0], p[1], p[2]);
+        col.push(c.r, c.g, c.b);
+      }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+      vertexColors: true, side: THREE.DoubleSide }));
+    this.modelGroup.add(mesh);
+    const wf = new THREE.LineSegments(new THREE.WireframeGeometry(g),
+      new THREE.LineBasicMaterial({ color: 0x222426, transparent: true, opacity: 0.18 }));
+    this.modelGroup.add(wf);
   }
 
   _radiusFor(el) {
@@ -257,11 +308,14 @@ export class Viewport {
       n.z + a.disp[i].dz * scale,
     ]);
 
-    // color range
+    // color range (beams + shells share one legend)
     const mode = view.colorMode || 'Utilization';
-    let values, unit, lo, hi;
+    const shellRes = a.shellResults || [];
+    let values, shellValues = null, unit, lo, hi;
     if (mode === 'Displacement') {
       values = a.results.map(r => (a.disp[r.el.n0].mag + a.disp[r.el.n1].mag) / 2 * 100);
+      shellValues = shellRes.map(sr =>
+        sr.nodesIdx.reduce((s, ni) => s + a.disp[ni].mag, 0) / 3 * 100);
       unit = 'cm'; lo = 0; hi = Math.max(a.maxDisp * 100, 1e-9);
     } else if (mode === 'Axial Force') {
       values = a.results.map(r => r.N);
@@ -273,8 +327,9 @@ export class Viewport {
       unit = 'kNm'; lo = 0; hi = Math.max(...values, 1e-9);
     } else {
       values = a.results.map(r => r.utilSigned * 100);
+      shellValues = shellRes.map(sr => sr.util * 100);
       unit = '%';
-      const mx = Math.max(...values.map(Math.abs), 1e-9);
+      const mx = Math.max(...values.map(Math.abs), ...(shellValues || []).map(Math.abs), 1e-9);
       lo = -mx; hi = mx;
     }
 
@@ -283,6 +338,13 @@ export class Viewport {
     for (const el of fem.elements) {
       const p0 = fem.nodes[el.n0], p1 = fem.nodes[el.n1];
       ghostVerts.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+    }
+    for (const sh of fem.shells) {
+      const p = [fem.nodes[sh.n0], fem.nodes[sh.n1], fem.nodes[sh.n2]];
+      for (let i = 0; i < 3; i++) {
+        const q = p[(i + 1) % 3];
+        ghostVerts.push(p[i].x, p[i].y, p[i].z, q.x, q.y, q.z);
+      }
     }
     const gg = new THREE.BufferGeometry();
     gg.setAttribute('position', new THREE.Float32BufferAttribute(ghostVerts, 3));
@@ -300,6 +362,14 @@ export class Viewport {
         this._radiusFor(el), col);
       if (m) this.modelGroup.add(m);
     });
+
+    // deformed colored shells
+    if (shellRes.length) {
+      this._drawShellTris(shellRes, defNodes, null, 0, 0, (i) => {
+        if (!shellValues) return new THREE.Color(0x9aa0a6); // mode not defined for shells
+        return rainbow((shellValues[i] - lo) / (hi - lo || 1));
+      });
+    }
 
     this._drawSupports(view.model, defNodes);
     this._drawLoads(view.model);
