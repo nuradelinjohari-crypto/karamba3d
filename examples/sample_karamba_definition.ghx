@@ -1,0 +1,414 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<Archive name="Root">
+  <chunks count="1">
+    <chunk name="Definition">
+      <chunks count="1">
+        <chunk name="DefinitionObjects">
+          <items count="1">
+            <item name="ObjectCount" type_name="gh_int32" type_code="3">10</item>
+          </items>
+          <chunks count="10">
+
+            <chunk name="Object" index="0">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">57da07bd-ecab-415d-9d86-af36d7073abc</item>
+                <item name="Name" type_name="gh_string" type_code="10">Number Slider</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0001-0000-0000-0000-000000000001</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Number Slider</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Diameter</item>
+                  </items>
+                  <chunks count="2">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>120</X><Y>300</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="Slider">
+                      <items count="4">
+                        <item name="Digits" type_name="gh_int32" type_code="3">1</item>
+                        <item name="Max" type_name="gh_double" type_code="6">20</item>
+                        <item name="Min" type_name="gh_double" type_code="6">2</item>
+                        <item name="Value" type_name="gh_double" type_code="6">8.5</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="1">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">11111111-1111-1111-1111-111111111111</item>
+                <item name="Name" type_name="gh_string" type_code="10">Curve</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0002-0000-0000-0000-000000000002</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Curve</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Crv</item>
+                  </items>
+                  <chunks count="1">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>120</X><Y>120</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="2">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">22222222-2222-2222-2222-222222222222</item>
+                <item name="Name" type_name="gh_string" type_code="10">Circular Hollow Profile</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0003-0000-0000-0000-000000000003</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Circular Hollow Profile</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">CroSec</item>
+                  </items>
+                  <chunks count="4">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>320</X><Y>290</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0003-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Diameter</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0001-0000-0000-0000-000000000001</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="1">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0003-0000-0000-0000-00000000in02</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Thickness</item>
+                      </items>
+                      <chunks count="1">
+                        <chunk name="PersistentData">
+                          <chunks count="1">
+                            <chunk name="Branch" index="0">
+                              <items count="1">
+                                <item name="Item" index="0" type_name="gh_double" type_code="6">0.5</item>
+                              </items>
+                            </chunk>
+                          </chunks>
+                        </chunk>
+                      </chunks>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0003-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">CroSec</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="3">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">33333333-3333-3333-3333-333333333333</item>
+                <item name="Name" type_name="gh_string" type_code="10">Line to Beam</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-000000000004</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Line to Beam</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">LtoB</item>
+                  </items>
+                  <chunks count="5">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>520</X><Y>120</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Line</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0002-0000-0000-0000-000000000002</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="1">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-00000000in02</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Identifier</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="2">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-00000000in03</item>
+                        <item name="Name" type_name="gh_string" type_code="10">CroSec</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0003-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Elem</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="4">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">44444444-4444-4444-4444-444444444444</item>
+                <item name="Name" type_name="gh_string" type_code="10">Support</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0005-0000-0000-0000-000000000005</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Support</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Supp</item>
+                  </items>
+                  <chunks count="3">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>520</X><Y>320</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0005-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Pos|Ind</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0005-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Support</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="5">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">55555555-5555-5555-5555-555555555555</item>
+                <item name="Name" type_name="gh_string" type_code="10">Gravity</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0006-0000-0000-0000-000000000006</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Gravity</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Grav</item>
+                  </items>
+                  <chunks count="3">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>520</X><Y>430</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0006-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Vec</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0006-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Load</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="6">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">66666666-6666-6666-6666-666666666666</item>
+                <item name="Name" type_name="gh_string" type_code="10">Assemble Model</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-000000000007</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Assemble Model</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Assemble</item>
+                  </items>
+                  <chunks count="5">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>760</X><Y>200</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Elem</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0004-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="1">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-00000000in02</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Support</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0005-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="2">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-00000000in03</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Load</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0006-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Model</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="7">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">77777777-7777-7777-7777-777777777777</item>
+                <item name="Name" type_name="gh_string" type_code="10">Analyze</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0008-0000-0000-0000-000000000008</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Analyze</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Analyze</item>
+                  </items>
+                  <chunks count="4">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>960</X><Y>200</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0008-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Model</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0007-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0008-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Model</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="1">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0008-0000-0000-0000-0000000out02</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Disp</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="8">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">88888888-8888-8888-8888-888888888888</item>
+                <item name="Name" type_name="gh_string" type_code="10">BeamView</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0009-0000-0000-0000-000000000009</item>
+                    <item name="Name" type_name="gh_string" type_code="10">BeamView</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">BView</item>
+                  </items>
+                  <chunks count="3">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>1160</X><Y>200</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_input" index="0">
+                      <items count="3">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0009-0000-0000-0000-00000000in01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Model</item>
+                        <item name="Source" index="0" type_name="gh_guid" type_code="9">aaaa0008-0000-0000-0000-0000000out01</item>
+                      </items>
+                    </chunk>
+                    <chunk name="param_output" index="0">
+                      <items count="2">
+                        <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0009-0000-0000-0000-0000000out01</item>
+                        <item name="Name" type_name="gh_string" type_code="10">Model</item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+            <chunk name="Object" index="9">
+              <items count="2">
+                <item name="GUID" type_name="gh_guid" type_code="9">99999999-9999-9999-9999-999999999999</item>
+                <item name="Name" type_name="gh_string" type_code="10">Galapagos</item>
+              </items>
+              <chunks count="1">
+                <chunk name="Container">
+                  <items count="3">
+                    <item name="InstanceGuid" type_name="gh_guid" type_code="9">aaaa0010-0000-0000-0000-000000000010</item>
+                    <item name="Name" type_name="gh_string" type_code="10">Galapagos</item>
+                    <item name="NickName" type_name="gh_string" type_code="10">Gala</item>
+                  </items>
+                  <chunks count="1">
+                    <chunk name="Attributes">
+                      <items count="1">
+                        <item name="Pivot" type_name="gh_drawing_pointf" type_code="30">
+                          <X>960</X><Y>430</Y>
+                        </item>
+                      </items>
+                    </chunk>
+                  </chunks>
+                </chunk>
+              </chunks>
+            </chunk>
+
+          </chunks>
+        </chunk>
+      </chunks>
+    </chunk>
+  </chunks>
+</Archive>

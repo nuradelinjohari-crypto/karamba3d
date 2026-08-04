@@ -56,9 +56,78 @@ def({
 def({
   type: 'Panel', name: 'Panel', nick: 'Panel',
   category: 'Params', layout: 'panel',
+  desc: 'A panel for custom notes and text values. Wired: displays incoming data. Unwired: acts as a text source (double-click to edit; right-click for font size & colour).',
   inputs: [{ name: 'In', nick: '' }], outputs: [{ name: 'Out', nick: '' }],
-  defaultState: () => ({ w: 130, h: 84 }),
+  defaultState: () => ({ w: 130, h: 84, text: '', fontSize: 9, color: '#fff9bd' }),
+  solve: (ins, node) => {
+    if (ins[0].length) return { Out: ins[0] };
+    const t = node.state.text ?? '';
+    return { Out: t === '' ? [] : t.split('\n').filter(s => s !== '') };
+  },
+});
+
+def({
+  type: 'ColourSwatch', name: 'Colour Swatch', nick: 'Swatch',
+  category: 'Params', layout: 'valuelist',
+  desc: 'A colour picker for Custom Preview. Click ◂ ▸ to cycle the palette; right-click ▸ Set custom colour for any hex value.',
+  inputs: [], outputs: [{ name: 'Colour', nick: 'C' }],
+  defaultState: () => ({
+    items: ['#d03434', '#e8890c', '#e8d20c', '#3fae3f', '#2196c9', '#3949ab', '#8e44ad', '#607d8b', '#212121'],
+    index: 0,
+  }),
+  onClick(node, wx) {
+    const n = node.state.items.length;
+    if (wx < node.x + node.w * 0.35) node.state.index = (node.state.index - 1 + n) % n;
+    else node.state.index = (node.state.index + 1) % n;
+    return true;
+  },
+  solve: (ins, node) => ({ Colour: [{ kind: 'color', hex: node.state.items[node.state.index] }] }),
+});
+
+def({
+  type: 'CustomPreview', name: 'Custom Preview', nick: 'Preview',
+  category: 'Params',
+  desc: 'Allows for customized geometry previews: displays the geometry in the given colour in the viewport (like Grasshopper\'s Custom Preview).',
+  inputs: [
+    { name: 'Geometry', nick: 'G', required: true },
+    { name: 'Material / Colour', nick: 'M' },
+  ],
+  outputs: [],
+  solve: (ins) => {
+    const col = ins[1].find(v => v && v.kind === 'color');
+    const items = ins[0].filter(v => v && (v.kind === 'point' || v.kind === 'line' || v.kind === 'mesh'));
+    return { __preview: [{ kind: 'cpreview', color: col ? col.hex : '#d03434', items }] };
+  },
+});
+
+def({
+  type: 'UnitZ', name: 'Unit Z', nick: 'Z',
+  category: 'Params',
+  desc: 'Unit vector parallel to the world Z axis, scaled by Factor.',
+  inputs: [{ name: 'Factor', nick: 'F', default: 1 }],
+  outputs: [{ name: 'Unit vector', nick: 'V' }],
+  solve: (ins) => ({ 'Unit vector': ins[0].map(f => V(0, 0, num(f, 1))) }),
+});
+
+def({
+  type: 'GeoParam', name: 'Geometry', nick: 'Geo',
+  category: 'Params',
+  desc: 'Pass-through container for geometry (Curve / Point / Mesh param from an imported Grasshopper file). Referenced Rhino geometry is re-bound to the imported .3dm model.',
+  inputs: [{ name: 'In', nick: '' }], outputs: [{ name: 'Out', nick: '' }],
+  defaultState: () => ({ paramKind: 'geometry', origName: '' }),
   solve: (ins) => ({ Out: ins[0] }),
+});
+
+def({
+  type: 'Unsupported', name: 'Unsupported Component', nick: '???',
+  category: 'Params',
+  desc: 'A component from the imported Grasshopper file that this replica does not implement. Data passes straight through untouched.',
+  inputs: [{ name: 'In', nick: '' }], outputs: [{ name: 'Out', nick: '' }],
+  defaultState: () => ({ origName: 'unknown' }),
+  solve: (ins, node) => {
+    node.warning = `'${node.state.origName}' is not implemented in this replica — data passes through unchanged`;
+    return { Out: ins[0] };
+  },
 });
 
 def({
@@ -986,14 +1055,60 @@ def({
   },
 });
 
+/* ================= component descriptions (tooltips) ================= */
+
+const DESCS = {
+  NumberSlider: 'Numeric slider for single values. Drag the grip; double-click for exact entry; right-click ▸ Edit for name/domain.',
+  BooleanToggle: 'Boolean (true/false) toggle — click to flip.',
+  ConstructPoint: 'Construct a point from {x, y, z} coordinates [m].',
+  VectorXYZ: 'Create a vector from {x, y, z} components.',
+  ImportGeometry: 'Outputs the geometry of the model imported via File ▸ Import Model… (.3dm / .obj / .dxf / .json): lines, points and meshes in meters.',
+  Series: 'Create a series of numbers from start, step size and count.',
+  Multiplication: 'Mathematical multiplication A × B.',
+  Line: 'Create a line between two points.',
+  LineToBeam: 'Karamba3D: converts lines to beam elements. Coincident endpoints (within 5 mm) become shared, rigidly connected nodes. Defaults: steel S235, CHS 114.3×4.',
+  MeshToShell: 'Karamba3D: converts a triangle/quad mesh to shell elements (CST membrane + DKT bending). Default thickness 1 cm.',
+  Support: 'Karamba3D: defines how the structure connects to the ground. Click the six checkboxes to fix translations Tx/Ty/Tz and rotations Rx/Ry/Rz at the given positions.',
+  Assemble: 'Karamba3D: assembles elements, supports and loads into one Model — merges coincident nodes, attaches loads/supports, computes mass and centre of gravity.',
+  Disassemble: 'Karamba3D: decomposes a model into its nodes, element lines, supports and loads.',
+  PointLoad: 'Karamba3D: concentrated force [kN] and/or moment [kNm] at a point or node.',
+  LineLoad: 'Karamba3D: uniformly distributed load [kN/m] on the beams lying on the given lines (applied via exact fixed-end forces).',
+  Gravity: 'Karamba3D: self-weight of all elements. |vector| = 1 equals 1 g; direction sets the pull (usually (0,0,−1)).',
+  CroSecRect: 'Karamba3D: solid rectangular cross section (height/width in cm).',
+  CroSecCircle: 'Karamba3D: circular hollow (CHS) cross section — diameter and wall thickness in cm.',
+  CroSecI: 'Karamba3D: I-profile cross section (height, width, flange and web thickness in cm).',
+  CroSecSelect: 'Karamba3D: pick a catalogue cross section (IPE / HEA / CHS tables). Click ◂ ▸ to browse.',
+  CroSecRange: 'Karamba3D: outputs a whole cross-section family (IPE / HEA / CHS / All) as candidates for Optimize Cross Section.',
+  ShellConst: 'Karamba3D: constant-thickness shell cross section [cm] with optional material.',
+  MatSelect: 'Karamba3D: select a material from the built-in table (steel, concrete, timber, aluminum). Default: Steel S235 — E 21000, fy 23.5 kN/cm².',
+  MatProps: 'Karamba3D: outputs the mechanical properties (E, G, γ, fy) of a material.',
+  AnalyzeThI: 'Karamba3D: linear-elastic first-order-theory analysis. Outputs the result model, max nodal displacement [cm], resultant gravity force [kN] and elastic energy [kNm].',
+  OptiCroSec: 'Karamba3D: iteratively selects the lightest candidate cross section per element such that utilization ≤ target, re-analyzing between passes.',
+  ModelView: 'Karamba3D: displays the (analyzed) model in the viewport with a deformation display-scale factor.',
+  BeamView: 'Karamba3D: renders beams/shells coloured by result — Utilization, Displacement, Axial Force or Bending Moment. Click ◂ ▸ to switch. Blue = min/compression, red = max/tension.',
+  NodalDisp: 'Karamba3D: nodal translations [cm] and rotations [rad] of the analyzed model.',
+  ReactionForces: 'Karamba3D: support reaction forces [kN] and moments [kNm].',
+  Utilization: 'Karamba3D: per-element utilization σ/fy (signed: − compression / + tension). |1.0| = 100%.',
+  BeamForces: 'Karamba3D: resultant beam section forces — N [kN], V [kN], M [kNm].',
+  TrussGenerator: 'Utility: parametric planar truss (Pratt-like) with support and load points.',
+  PortalFrame: 'Utility: parametric multi-storey 3D portal frame.',
+  ShellCanopy: 'Utility: parametric paraboloid canopy mesh with corner support points.',
+  BottomPoints: 'Utility: selects the lowest points of a set (z ≤ zmin + tolerance) — handy for auto-placing supports under an imported model.',
+};
+for (const [t, d] of Object.entries(DESCS)) {
+  const dd = registry.get(t);
+  if (dd && !dd.desc) dd.desc = d;
+}
+
 /* ================= toolbar structure ================= */
 
 export const COMPONENT_TABS = [
   {
     tab: 'Params',
     groups: [
-      { name: 'Input', items: ['NumberSlider', 'Panel', 'BooleanToggle'] },
-      { name: 'Geometry', items: ['ConstructPoint', 'VectorXYZ', 'ImportGeometry'] },
+      { name: 'Input', items: ['NumberSlider', 'Panel', 'BooleanToggle', 'ColourSwatch'] },
+      { name: 'Geometry', items: ['ConstructPoint', 'VectorXYZ', 'UnitZ', 'ImportGeometry'] },
+      { name: 'Display', items: ['CustomPreview'] },
     ],
   },
   {

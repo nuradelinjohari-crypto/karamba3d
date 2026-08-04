@@ -40,6 +40,30 @@ stresses & strengths **kN/cm²** · displacements reported in **cm**.
 Material **Steel S235** (E = 21000 kN/cm², γ = 78.5 kN/m³, fy = 23.5 kN/cm²);
 beam section **CHS Ø 114.3 × 4 mm** when nothing is wired in.
 
+## Grasshopper interaction parity
+
+- **Hover tooltips** — hover any component for its full name, nickname and description;
+  hover an input/output nub for the parameter's full name and the live data flowing
+  through it (item count + first values). Errors and warnings appear in the tooltip
+  and in the context menu, with the exact message (e.g. which DOF is kinematic and where).
+- **Right-click context menu** — per-component *Preview* and *Enabled* toggles
+  (disabled components go flat gray and stop solving, preview-off components hide from
+  the viewport), *Delete*, and per-type extras: slider domain editing, panel font size
+  and colour, custom hex colours on swatches.
+- **Panel** — unwired panels are text sources: double-click to edit (multi-line),
+  drag the bottom-right grip to resize, right-click for font size and colour.
+- **Custom Preview** — pipe geometry + a *Colour Swatch* into it to display that
+  geometry in your colour in the viewport.
+- **Open Grasshopper Definition… (.ghx)** — imports a real Grasshopper file: Karamba
+  2.x components (Line to Beam, Support, Assemble, Analyze, views, cross sections,
+  materials, OptiCroSec…) and GH natives (sliders with their values/domains, panels
+  with their text, toggles, points/curve params with persistent data) are mapped onto
+  this replica, wires reconstructed, and referenced Rhino geometry **re-bound to the
+  model imported via File ▸ Import Model…** — so your Karamba script runs directly on
+  your uploaded .3dm. Unknown components become pass-through placeholders and are
+  listed in an import report panel. Binary .gh files must be re-saved as .ghx in
+  Grasshopper (File ▸ Save As ▸ "Grasshopper XML") — same archive, XML flavor.
+
 ## Using it
 
 1. **Examples menu** → Parametric Truss Bridge / 3D Portal Frame Tower / Simple Cantilever.

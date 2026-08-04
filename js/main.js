@@ -6,6 +6,7 @@
 import { GraphEngine, formatValue } from './graph/engine.js';
 import { registry, COMPONENT_TABS } from './graph/components.js';
 import { Viewport } from './viewport/viewport.js';
+import { parseGHX, buildGraph } from './io/ghimport.js';
 
 const canvas = document.getElementById('gh-canvas');
 const engine = new GraphEngine(canvas, registry);
@@ -27,7 +28,7 @@ engine.onSolved = () => {
       for (const v of list) {
         if (!v || typeof v !== 'object') continue;
         if (v.kind === 'view') views.push(v);
-        else if (v.kind === 'point' || v.kind === 'line') previews.push(v);
+        else if (v.kind === 'point' || v.kind === 'line' || v.kind === 'cpreview') previews.push(v);
       }
     }
   }
@@ -170,12 +171,175 @@ document.addEventListener('mousedown', e => {
   if (search.style.display === 'block' && !search.contains(e.target)) closeSearch();
 });
 
+/* ================= hover tooltips (GH-style) ================= */
+
+const tooltip = document.createElement('div');
+tooltip.id = 'gh-tooltip';
+document.getElementById('gh-pane').appendChild(tooltip);
+
+engine.onHover = (hit, cx, cy) => {
+  if (!hit) { tooltip.style.display = 'none'; return; }
+  const host = document.getElementById('gh-pane').getBoundingClientRect();
+  const n = hit.node, d = n.def;
+  let html = '';
+  if (hit.kind === 'inport' || hit.kind === 'outport') {
+    const isOut = hit.kind === 'outport';
+    const p = (isOut ? n.outputs : n.inputs)[hit.port];
+    html += `<div class="tt-title">${p.name}${p.nick && p.nick !== p.name ? ` <span class="tt-nick">(${p.nick})</span>` : ''}</div>`;
+    html += `<div class="tt-sub">${isOut ? 'Output' : 'Input'} of ${d.name}</div>`;
+    let vals;
+    if (isOut) {
+      const out = n.values ? n.values[p.name] : null;
+      vals = out == null ? [] : (Array.isArray(out) ? out : [out]);
+    } else {
+      vals = engine.inputValues(n, hit.port);
+      if (!vals.length && p.default !== undefined) {
+        html += `<div class="tt-data">default: ${formatValue(p.default)}</div>`;
+      }
+    }
+    if (vals.length) {
+      html += `<div class="tt-data">${vals.length} item${vals.length > 1 ? 's' : ''}</div>`;
+      vals.slice(0, 4).forEach((v, i) => { html += `<div class="tt-item">${i}. ${escapeHtml(formatValue(v))}</div>`; });
+      if (vals.length > 4) html += `<div class="tt-item">…</div>`;
+    } else if (!isOut && p.required) {
+      html += `<div class="tt-warn">No data collected — this input is required.</div>`;
+    }
+  } else {
+    html += `<div class="tt-title">${d.name} <span class="tt-nick">(${d.nick})</span></div>`;
+    if (n.state && n.state.origName && d.type !== undefined && n.type === 'Unsupported')
+      html += `<div class="tt-sub">Original: ${escapeHtml(n.state.origName)}</div>`;
+    if (d.desc) html += `<div class="tt-desc">${d.desc}</div>`;
+    if (!n.enabled) html += `<div class="tt-warn">Disabled — right-click ▸ Enabled to reactivate.</div>`;
+    if (n.error) html += `<div class="tt-error">✗ Error: ${escapeHtml(n.error)}</div>`;
+    if (n.warning) html += `<div class="tt-warn">⚠ Warning: ${escapeHtml(n.warning)}</div>`;
+    if (n.previewOff) html += `<div class="tt-sub">Preview off</div>`;
+  }
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  const x = Math.min(cx - host.left + 14, host.width - 290);
+  const y = Math.min(cy - host.top + 16, host.height - tooltip.offsetHeight - 12);
+  tooltip.style.left = Math.max(4, x) + 'px';
+  tooltip.style.top = Math.max(4, y) + 'px';
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ================= right-click context menu (GH-style) ================= */
+
+let ctxMenu = null;
+function closeCtxMenu() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
+document.addEventListener('mousedown', (e) => { if (ctxMenu && !ctxMenu.contains(e.target)) closeCtxMenu(); });
+
+engine.onNodeContext = (node, cx, cy) => {
+  closeCtxMenu();
+  tooltip.style.display = 'none';
+  const menu = document.createElement('div');
+  menu.id = 'ctx-menu';
+  const add = (label, fn, opts = {}) => {
+    const it = document.createElement('div');
+    it.className = 'ctx-item' + (opts.header ? ' ctx-header' : '') + (opts.danger ? ' ctx-danger' : '');
+    it.innerHTML = (opts.check !== undefined ? `<span class="ctx-check">${opts.check ? '✓' : ' '}</span>` : '') + label;
+    if (fn) it.onclick = () => { fn(); closeCtxMenu(); };
+    menu.appendChild(it);
+    return it;
+  };
+  const sep = () => menu.appendChild(Object.assign(document.createElement('hr')));
+
+  add(`${node.def.name}`, null, { header: true });
+  if (node.error) add(`<span class="ctx-err">✗ ${escapeHtml(node.error)}</span>`, null, {});
+  if (node.warning) add(`<span class="ctx-warntxt">⚠ ${escapeHtml(node.warning)}</span>`, null, {});
+  sep();
+  add('Preview', () => { node.previewOff = !node.previewOff; engine.scheduleSolve(); }, { check: !node.previewOff });
+  add('Enabled', () => {
+    node.enabled = !node.enabled;
+    engine._markDirty(node);
+    engine.scheduleSolve();
+  }, { check: node.enabled });
+
+  if (node.def.layout === 'panel') {
+    sep();
+    add('Edit text…', () => openPanelEditor(node));
+    add('Font size ▸ smaller', () => { node.state.fontSize = Math.max(7, (node.state.fontSize || 9) - 1); engine.draw(); });
+    add('Font size ▸ larger', () => { node.state.fontSize = Math.min(18, (node.state.fontSize || 9) + 1); engine.draw(); });
+    const colours = [['Yellow', '#fff9bd'], ['White', '#f6f6f2'], ['Grey', '#d8d8d4'], ['Blue', '#cfe2f3'], ['Green', '#d9ead3'], ['Pink', '#f4cccc']];
+    for (const [nm, hex] of colours)
+      add(`Colour ▸ ${nm}`, () => { node.state.color = hex; engine.draw(); });
+  }
+  if (node.def.layout === 'slider') {
+    sep();
+    add('Edit slider…', () => {
+      const s = node.state;
+      const name = prompt('Slider name:', s.name); if (name === null) return;
+      const min = parseFloat(prompt('Minimum:', s.min)); if (isNaN(min)) return;
+      const max = parseFloat(prompt('Maximum:', s.max)); if (isNaN(max)) return;
+      const step = parseFloat(prompt('Step:', s.step));
+      Object.assign(s, { name, min, max, step: isNaN(step) ? s.step : step });
+      s.value = Math.max(min, Math.min(max, s.value));
+      engine._markDirty(node); engine.scheduleSolve();
+    });
+  }
+  if (node.type === 'ColourSwatch') {
+    sep();
+    add('Set custom colour…', () => {
+      const hex = prompt('Hex colour (e.g. #d03434):', node.state.items[node.state.index]);
+      if (hex && /^#[0-9a-fA-F]{6}$/.test(hex.trim())) {
+        node.state.items[node.state.index] = hex.trim();
+        engine._markDirty(node); engine.scheduleSolve();
+      }
+    });
+  }
+  sep();
+  add('Delete', () => engine.removeNodes([node]), { danger: true });
+
+  document.body.appendChild(menu);
+  menu.style.left = Math.min(cx, window.innerWidth - 240) + 'px';
+  menu.style.top = Math.min(cy, window.innerHeight - menu.offsetHeight - 8) + 'px';
+  ctxMenu = menu;
+};
+
+/* ================= panel text editor ================= */
+
+let panelEditor = null;
+function openPanelEditor(node) {
+  if (panelEditor) panelEditor.remove();
+  const host = document.getElementById('gh-pane');
+  const ta = document.createElement('textarea');
+  ta.id = 'panel-editor';
+  ta.value = node.state.text || '';
+  const tl = engine.toScreen(node.x, node.y);
+  ta.style.left = Math.max(4, tl.x) + 'px';
+  ta.style.top = Math.max(4, tl.y) + 'px';
+  ta.style.width = Math.max(node.w * engine.zoom, 140) + 'px';
+  ta.style.height = Math.max(node.h * engine.zoom, 70) + 'px';
+  ta.style.fontSize = ((node.state.fontSize || 9) * engine.zoom) + 'px';
+  const commit = () => {
+    node.state.text = ta.value;
+    ta.remove(); panelEditor = null;
+    engine._markDirty(node);
+    engine.scheduleSolve();
+  };
+  ta.addEventListener('blur', commit);
+  ta.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { ta.value = node.state.text || ''; ta.blur(); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ta.blur();
+  });
+  host.appendChild(ta);
+  ta.focus();
+  panelEditor = ta;
+}
+
+engine.onPanelEdit = (node) => openPanelEditor(node);
+
 /* ================= menus ================= */
 
 const MENUS = {
   File: [
     ['New Definition', () => { engine.nodes = []; engine.wires = []; engine.scheduleSolve(); }],
     ['Import Model… (3DM / OBJ / DXF / JSON)', () => fileInput.click()],
+    ['Open Grasshopper Definition… (.ghx)', () => ghInput.click()],
     ['—'],
     ['Save Definition (.ghjson)', saveDefinition],
     ['Open Definition…', () => defInput.click()],
@@ -242,6 +406,51 @@ document.addEventListener('click', () => { if (openMenu) { openMenu.remove(); op
 
 const fileInput = document.getElementById('file-input');
 const defInput = document.getElementById('def-input');
+const ghInput = document.getElementById('gh-input');
+
+/* ---- Grasshopper definition import (.ghx) ---- */
+
+ghInput.addEventListener('change', async () => {
+  const f = ghInput.files[0];
+  if (!f) return;
+  ghInput.value = '';
+  const buf = await f.arrayBuffer();
+  const head = new Uint8Array(buf.slice(0, 64));
+  const headText = new TextDecoder('utf-8', { fatal: false }).decode(head);
+  const isXml = headText.trimStart().startsWith('<');
+  if (!isXml) {
+    alert(
+      'This is a binary .gh file — its GH_IO binary archive cannot be read in the browser.\n\n' +
+      'In Grasshopper: File ▸ Save As… and pick the file type\n' +
+      '"Grasshopper XML (*.ghx)", then import that file here.\n\n' +
+      'The .ghx contains exactly the same definition, just as XML.');
+    return;
+  }
+  try {
+    const parsed = parseGHX(new TextDecoder().decode(buf));
+    const report = buildGraph(engine, parsed);
+    // report panel on the canvas, GH-style
+    const lines = [
+      `◂ ${f.name} ▸`,
+      `${report.mapped} components mapped, ${report.wires} wires`,
+      report.sliders ? `${report.sliders} sliders restored` : null,
+      report.rebound ? `${report.rebound} geometry inputs re-bound to Import` : null,
+      report.unsupported.length
+        ? `Unsupported (${report.unsupported.length}): ${[...new Set(report.unsupported)].join(', ')}`
+        : 'All components recognized',
+      window.__importedGeometry ? `running on: ${window.__importedGeometry.name}` : 'no model imported yet — File ▸ Import Model…',
+    ].filter(Boolean);
+    const rep = engine.addNode('Panel', -180, -140, {
+      text: lines.join('\n'), w: 250, h: 16 + lines.length * 14, fontSize: 9,
+      color: report.unsupported.length ? '#f4e5cc' : '#d9ead3',
+    });
+    rep.previewOff = true;
+    for (const w of parsed.warnings) console.warn('ghx import:', w);
+    setTimeout(() => { engine.zoomExtents(); viewport.zoomExtents(); }, 500);
+  } catch (err) {
+    alert('Could not read Grasshopper file: ' + err.message);
+  }
+});
 
 fileInput.addEventListener('change', async () => {
   const f = fileInput.files[0];

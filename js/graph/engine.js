@@ -51,7 +51,10 @@ export class GraphEngine {
       warning: null,
       dirty: true,
       previewOff: false,
+      enabled: true,
     };
+    if (state.__previewOff) node.previewOff = true;
+    if (state.__disabled) node.enabled = false;
     this._layoutNode(node);
     this.nodes.push(node);
     this.scheduleSolve();
@@ -156,6 +159,10 @@ export class GraphEngine {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i];
       if (wx >= n.x && wx <= n.x + n.w && wy >= n.y && wy <= n.y + n.h) {
+        if (n.def.layout === 'panel' &&
+            wx > n.x + n.w - 12 && wy > n.y + n.h - 12) {
+          return { kind: 'panelResize', node: n };
+        }
         if (n.def.layout === 'slider') {
           return { kind: 'slider', node: n };
         }
@@ -227,6 +234,10 @@ export class GraphEngine {
       }
       return;
     }
+    if (hit && hit.kind === 'panelResize') {
+      this.dragState = { kind: 'panelResize', node: hit.node, x: pt.x, y: pt.y, w0: hit.node.w, h0: hit.node.h };
+      return;
+    }
     if (hit && hit.kind === 'node') {
       if (hit.node.def.onClick && hit.node.def.onClick(hit.node, pt.x, pt.y, this)) {
         this._markDirty(hit.node);
@@ -273,7 +284,14 @@ export class GraphEngine {
     if (!ds) {
       const hit = this.hitTest(pt.x, pt.y);
       const newHover = hit ? (hit.node.id + ':' + hit.kind + ':' + (hit.port ?? '')) : null;
-      if (newHover !== this._hoverKey) { this._hoverKey = newHover; this.hover = hit; this.draw(); }
+      if (newHover !== this._hoverKey) {
+        this._hoverKey = newHover;
+        this.hover = hit;
+        this.draw();
+        if (this.onHover) this.onHover(hit, e.clientX, e.clientY);
+      } else if (hit && this.onHover) {
+        this.onHover(hit, e.clientX, e.clientY, true); // reposition only
+      }
       this.canvas.style.cursor = hit ? (hit.kind === 'node' ? 'default' : 'crosshair') : 'default';
       return;
     }
@@ -296,6 +314,14 @@ export class GraphEngine {
       return;
     }
     if (ds.kind === 'sliderDrag') { this._sliderSet(ds.node, pt.x); this.draw(); return; }
+    if (ds.kind === 'panelResize') {
+      const n = ds.node;
+      n.w = Math.max(70, ds.w0 + (pt.x - ds.x));
+      n.h = Math.max(40, ds.h0 + (pt.y - ds.y));
+      n.state.w = n.w; n.state.h = n.h;
+      this.draw();
+      return;
+    }
     if (ds.kind === 'box') { ds.x1 = pt.x; ds.y1 = pt.y; this.draw(); return; }
   }
 
@@ -318,10 +344,9 @@ export class GraphEngine {
         this.onSelectionInfo([...this.selection]);
       }
     } else if (ds.kind === 'pan' && !ds.moved && e.button === 2) {
-      // right click without drag = context: toggle preview on node
-      if (ds.hit && (ds.hit.kind === 'node' || ds.hit.kind === 'slider')) {
-        ds.hit.node.previewOff = !ds.hit.node.previewOff;
-        this.scheduleSolve();
+      // right click without drag → GH-style context menu
+      if (ds.hit && ds.hit.node && this.onNodeContext) {
+        this.onNodeContext(ds.hit.node, e.clientX, e.clientY);
       }
     }
     this.dragState = null;
@@ -345,6 +370,8 @@ export class GraphEngine {
     const hit = this.hitTest(pt.x, pt.y);
     if (!hit) {
       if (this.onOpenSearch) this.onOpenSearch(e.clientX, e.clientY, pt.x, pt.y);
+    } else if ((hit.kind === 'node' || hit.kind === 'panelResize') && hit.node.def.layout === 'panel') {
+      if (this.onPanelEdit) this.onPanelEdit(hit.node);
     } else if (hit.kind === 'slider') {
       const n = hit.node;
       const v = prompt(`${n.state.name || 'Slider'} — value (${n.state.min} … ${n.state.max}):`, n.state.value);
@@ -391,6 +418,9 @@ export class GraphEngine {
         if (out != null) vals.push(...(Array.isArray(out) ? out : [out]));
       }
     }
+    // persistent (internalized) data — set e.g. by the Grasshopper-file importer
+    if (!vals.length && node.state.__persist && node.state.__persist[portIdx])
+      vals.push(...node.state.__persist[portIdx]);
     return vals;
   }
 
@@ -412,6 +442,7 @@ export class GraphEngine {
     for (const n of order) {
       if (!n.dirty && n.values) continue;
       n.error = null; n.warning = null;
+      if (!n.enabled) { n.values = {}; n.dirty = false; continue; }
       const ins = n.inputs.map((p, i) => {
         const v = this.inputValues(n, i);
         if (v.length === 0 && p.default !== undefined) return Array.isArray(p.default) ? p.default : [p.default];
@@ -531,6 +562,7 @@ export class GraphEngine {
   }
 
   _nodeColors(n) {
+    if (!n.enabled) return { body: '#b8b8b8', edge: '#8a8a8a', cap: '#a5a5a5' };
     if (n.error) return { body: '#e8a0a0', edge: '#7c2222', cap: '#c46060' };
     if (this.selection.has(n)) return { body: '#a8d08d', edge: '#3f6212', cap: '#7fb069' };
     if (n.warning) return { body: '#f2c689', edge: '#8a5a10', cap: '#e0a050' };
@@ -699,9 +731,12 @@ export class GraphEngine {
   }
 
   _drawPanel(ctx, n, col) {
+    const bg = n.state.color || '#fff9bd';
+    const fs = n.state.fontSize || 9;
+    const lh = fs + 2.5;
     ctx.fillStyle = 'rgba(0,0,0,0.22)';
     this._rr(ctx, n.x + 2.5, n.y + 2.5, n.w, n.h, 2); ctx.fill();
-    ctx.fillStyle = '#fff9bd';
+    ctx.fillStyle = bg;
     this._rr(ctx, n.x, n.y, n.w, n.h, 2); ctx.fill();
     ctx.strokeStyle = this.selection.has(n) ? '#3f6212' : '#8a8455';
     ctx.lineWidth = this.selection.has(n) ? 1.6 : 1;
@@ -710,21 +745,40 @@ export class GraphEngine {
     ctx.fillStyle = 'rgba(0,0,0,0.07)';
     ctx.fillRect(n.x, n.y, n.w, 10);
 
-    const vals = this.inputValues(n, 0);
+    const wired = this.wires.some(w => w.to.node === n && w.to.port === 0);
+    const vals = wired ? this.inputValues(n, 0) : [];
     ctx.fillStyle = '#33301c';
-    ctx.font = '9px "Consolas", "Menlo", monospace';
+    ctx.font = `${fs}px "Consolas", "Menlo", monospace`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
     let y = n.y + 13;
-    const maxLines = Math.floor((n.h - 16) / 11);
+    const maxLines = Math.max(1, Math.floor((n.h - 16) / lh));
     const lines = [];
-    if (vals.length === 0) lines.push('  <empty>');
-    else vals.slice(0, maxLines).forEach((v, i) => lines.push(` ${i}. ${formatValue(v)}`));
-    if (vals.length > maxLines) lines[maxLines - 1] = ` … ${vals.length} items`;
+    if (!wired) {
+      // text-source mode: show the panel's own text (double-click to edit)
+      const txt = (n.state.text ?? '').split('\n');
+      if (!txt[0] && txt.length === 1) lines.push('  double-click to edit…');
+      else txt.forEach(t => lines.push(' ' + t));
+    } else if (vals.length === 0) {
+      lines.push('  <empty>');
+    } else {
+      vals.slice(0, maxLines).forEach((v, i) => lines.push(` ${i}. ${formatValue(v)}`));
+      if (vals.length > maxLines) lines[maxLines - 1] = ` … ${vals.length} items`;
+    }
     for (const ln of lines.slice(0, maxLines)) {
       ctx.fillText(ln, n.x + 3, y, n.w - 6);
-      y += 11;
+      y += lh;
+    }
+    // resize grip (bottom-right)
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    for (let g = 0; g < 3; g++) {
+      ctx.beginPath();
+      ctx.moveTo(n.x + n.w - 10 + g * 3, n.y + n.h - 2);
+      ctx.lineTo(n.x + n.w - 2, n.y + n.h - 10 + g * 3);
+      ctx.stroke();
     }
     this._drawPort(ctx, this.portPos(n, 0, false), n, col);
+    this._drawPort(ctx, this.portPos(n, 0, true), n, col);
   }
 
   _shade(hex, amt) {
@@ -740,7 +794,11 @@ export class GraphEngine {
     return {
       nodes: this.nodes.map(n => ({
         id: n.id, type: n.type, x: Math.round(n.x), y: Math.round(n.y),
-        state: serializableState(n.state),
+        state: {
+          ...serializableState(n.state),
+          ...(n.previewOff ? { __previewOff: true } : {}),
+          ...(n.enabled === false ? { __disabled: true } : {}),
+        },
       })),
       wires: this.wires.map(w => ({
         from: [w.from.node.id, w.from.port], to: [w.to.node.id, w.to.port],

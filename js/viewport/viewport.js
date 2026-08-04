@@ -193,6 +193,11 @@ export class Viewport {
       if (v && v.kind === 'line') { bbp(v.a.x, v.a.y, v.a.z); bbp(v.b.x, v.b.y, v.b.z); }
       else if (v && v.kind === 'point') bbp(v.x, v.y, v.z);
       else if (v && v.kind === 'mesh') for (const p of v.vertices) bbp(p[0], p[1], p[2]);
+      else if (v && v.kind === 'cpreview') for (const it of v.items) {
+        if (it.kind === 'line') { bbp(it.a.x, it.a.y, it.a.z); bbp(it.b.x, it.b.y, it.b.z); }
+        else if (it.kind === 'point') bbp(it.x, it.y, it.z);
+        else if (it.kind === 'mesh') for (const p of it.vertices) bbp(p[0], p[1], p[2]);
+      }
     }
     for (const view of views) {
       const fem = view.model && view.model.fem;
@@ -223,6 +228,28 @@ export class Viewport {
     for (const v of previews) {
       if (v && v.kind === 'mesh') this._drawMeshPreview(v);
     }
+    // Custom Preview: geometry in a user colour
+    for (const v of previews) {
+      if (!v || v.kind !== 'cpreview') continue;
+      const col = new THREE.Color(v.color);
+      const cVerts = [];
+      for (const it of v.items) {
+        if (it.kind === 'line') cVerts.push(it.a.x, it.a.y, it.a.z, it.b.x, it.b.y, it.b.z);
+        else if (it.kind === 'point') {
+          const m = new THREE.Mesh(new THREE.SphereGeometry((this.symScale || 0.2) * 0.25, 8, 8),
+            new THREE.MeshBasicMaterial({ color: col }));
+          m.position.set(it.x, it.y, it.z);
+          this.modelGroup.add(m);
+        } else if (it.kind === 'mesh') {
+          this._drawMeshPreview(it, col);
+        }
+      }
+      if (cVerts.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(cVerts, 3));
+        this.modelGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: col })));
+      }
+    }
 
     for (const view of views) {
       if (view.analysis) legend = this._drawAnalyzed(view) || legend;
@@ -244,7 +271,7 @@ export class Viewport {
     return mesh;
   }
 
-  _drawMeshPreview(v) {
+  _drawMeshPreview(v, color) {
     const g = new THREE.BufferGeometry();
     const pos = [];
     for (const f of v.faces) {
@@ -256,7 +283,7 @@ export class Viewport {
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.computeVertexNormals();
     const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
-      color: 0xb05a5a, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+      color: color || 0xb05a5a, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
     this.modelGroup.add(mesh);
     const wf = new THREE.LineSegments(new THREE.WireframeGeometry(g),
       new THREE.LineBasicMaterial({ color: 0x5a2323, transparent: true, opacity: 0.3 }));

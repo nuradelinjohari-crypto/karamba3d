@@ -305,6 +305,70 @@ body { display: flex; flex-direction: column; }
 .search-item:hover, .search-item.first { background: #dcE9f7; }
 .search-cat { margin-left: auto; color: #999; font-size: 9px; }
 
+/* ---------------- tooltip (GH-style) ---------------- */
+
+#gh-tooltip {
+  position: absolute;
+  display: none;
+  max-width: 280px;
+  background: #fbfbf4;
+  border: 1px solid #6a6a5a;
+  border-radius: 3px;
+  box-shadow: 2px 3px 9px rgba(0,0,0,0.35);
+  padding: 6px 9px;
+  font-size: 11px;
+  color: #26241c;
+  pointer-events: none;
+  z-index: 60;
+}
+.tt-title { font-weight: 700; font-size: 11.5px; }
+.tt-nick { font-weight: 400; color: #6a675c; }
+.tt-sub { color: #6a675c; font-size: 10px; margin-top: 1px; }
+.tt-desc { margin-top: 4px; line-height: 1.35; }
+.tt-data { margin-top: 4px; color: #444; font-size: 10px; font-weight: 600; }
+.tt-item { font-family: Consolas, Menlo, monospace; font-size: 9.5px; color: #333; }
+.tt-error { margin-top: 4px; color: #a01212; font-weight: 600; }
+.tt-warn { margin-top: 4px; color: #9c6207; font-weight: 600; }
+
+/* ---------------- context menu (GH-style) ---------------- */
+
+#ctx-menu {
+  position: fixed;
+  min-width: 200px;
+  max-width: 300px;
+  background: #f7f7f9;
+  border: 1px solid #8a8a90;
+  border-radius: 3px;
+  box-shadow: 3px 4px 12px rgba(0,0,0,0.4);
+  z-index: 200;
+  padding: 3px 0;
+  font-size: 11.5px;
+}
+#ctx-menu hr { border: none; border-top: 1px solid #d8d8dc; margin: 3px 4px; }
+.ctx-item { padding: 4px 12px 4px 8px; color: #222; display: flex; align-items: baseline; gap: 4px; }
+.ctx-item:hover { background: #3875d7; color: #fff; }
+.ctx-header { font-weight: 700; background: #e4e4e8; color: #333; pointer-events: none; }
+.ctx-check { display: inline-block; width: 14px; font-weight: 700; }
+.ctx-danger:hover { background: #c0392b; }
+.ctx-err { color: #a01212; font-size: 10.5px; white-space: normal; }
+.ctx-warntxt { color: #9c6207; font-size: 10.5px; white-space: normal; }
+.ctx-item:hover .ctx-err, .ctx-item:hover .ctx-warntxt { color: #fff; }
+
+/* ---------------- panel text editor ---------------- */
+
+#panel-editor {
+  position: absolute;
+  z-index: 80;
+  background: #fffbe0;
+  border: 2px solid #3f6212;
+  border-radius: 2px;
+  font-family: Consolas, Menlo, monospace;
+  color: #33301c;
+  padding: 4px;
+  resize: none;
+  outline: none;
+}
+
 /* ---------------- status bar ---------------- */
 
 #statusbar {
