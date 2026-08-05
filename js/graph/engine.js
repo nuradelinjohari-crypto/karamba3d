@@ -24,6 +24,7 @@ export class GraphEngine {
     this.hover = null;
     this.dragState = null;
     this.onSolved = () => {};
+    this.onGraphEdit = () => {};
     this.onSelectionInfo = () => {};
     this._solveScheduled = false;
     this._idCounter = 1;
@@ -62,6 +63,7 @@ export class GraphEngine {
   }
 
   removeNodes(nodes) {
+    this.onGraphEdit();
     const set = new Set(nodes);
     this.wires = this.wires.filter(w => !set.has(w.from.node) && !set.has(w.to.node));
     this.nodes = this.nodes.filter(n => !set.has(n));
@@ -75,12 +77,14 @@ export class GraphEngine {
     // one wire per input unless input allows multiple (GH merges lists; we allow multi)
     this.wires = this.wires.filter(w => !(w.to.node === toNode && w.to.port === toPort && w.from.node === fromNode && w.from.port === fromPort));
     this.wires.push({ from: { node: fromNode, port: fromPort }, to: { node: toNode, port: toPort } });
+    this.onGraphEdit();
     this._markDirty(toNode);
     this.scheduleSolve();
   }
 
   disconnectInput(node, portIdx) {
     this.wires = this.wires.filter(w => !(w.to.node === node && w.to.port === portIdx));
+    this.onGraphEdit();
     this._markDirty(node);
     this.scheduleSolve();
   }
@@ -272,6 +276,7 @@ export class GraphEngine {
     if (s.step > 0) v = Math.round(v / s.step) * s.step;
     v = Math.max(s.min, Math.min(s.max, v));
     if (v !== s.value) {
+      this.onGraphEdit();
       s.value = parseFloat(v.toFixed(6));
       this._markDirty(node);
       this.scheduleSolve();
@@ -631,6 +636,15 @@ export class GraphEngine {
       ctx.textAlign = 'left';
       ctx.fillText(p.nick || p.name, n.x + 7, pos.y);
       this._drawPort(ctx, pos, n, col);
+      // internalised (Set Geometry) data — GH marks such params with a solid nub
+      const persisted = n.state.__persist && n.state.__persist[i] && n.state.__persist[i].length;
+      if (persisted) {
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 2.1, 0, Math.PI * 2);
+        ctx.fillStyle = '#1f6f2f';
+        ctx.fill();
+        ctx.fillStyle = '#26262a';
+      }
     });
     n.outputs.forEach((p, i) => {
       const pos = this.portPos(n, i, true);

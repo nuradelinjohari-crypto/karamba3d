@@ -234,6 +234,85 @@ body { display: flex; flex-direction: column; }
 }
 #btn-zoom-ext:hover { background: #fff; }
 
+/* ---------------- Rhino layers panel ---------------- */
+
+#layers-panel {
+  position: absolute;
+  top: 38px;
+  right: 8px;
+  display: none;
+  width: 186px;
+  background: rgba(248, 248, 250, 0.93);
+  border: 1px solid rgba(0,0,0,0.35);
+  border-radius: 3px;
+  box-shadow: 2px 3px 8px rgba(0,0,0,0.25);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+#layers-head {
+  background: linear-gradient(#e8e8ec, #d9d9df);
+  border-bottom: 1px solid #b5b5bb;
+  padding: 3px 8px;
+  font-weight: 700;
+  color: #33333a;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+#layers-doc { font-weight: 400; font-size: 9px; color: #74747c; }
+#layers-panel.picking { top: 84px; }
+
+#layers-list { max-height: 190px; overflow-y: auto; }
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: default;
+  color: #26262c;
+}
+.layer-row:hover { background: #dce9f7; }
+.layer-row.sel { background: #cfe0f5; }
+.layer-eye { width: 13px; text-align: center; font-size: 10px; color: #555; }
+.layer-eye.off { opacity: 0.28; }
+.layer-swatch { width: 11px; height: 11px; border: 1px solid rgba(0,0,0,0.45); border-radius: 2px; flex: none; }
+.layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-count { font-size: 9px; color: #74747c; }
+
+/* ---------------- pick prompt (Rhino command line) ---------------- */
+
+#pick-prompt {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  background: rgba(28, 32, 38, 0.94);
+  border-bottom: 1px solid #0d0f12;
+  color: #e8ecf0;
+  padding: 6px 12px;
+  font-size: 12px;
+  z-index: 30;
+}
+#pick-text { font-weight: 600; }
+#pick-count { color: #ffe000; font-size: 11px; }
+#pick-prompt button {
+  margin-left: auto;
+  background: #3d4a5a;
+  color: #eef2f6;
+  border: 1px solid #55647a;
+  border-radius: 3px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#pick-prompt button + button { margin-left: 4px; }
+#pick-accept { background: #2f6b34; border-color: #3d8a44; }
+#pick-cancel { background: #6b2f2f; border-color: #8a3d3d; }
+#pick-prompt button:hover { filter: brightness(1.25); }
+
 /* ---------------- legend (Karamba HUD) ---------------- */
 
 #legend {
@@ -327,6 +406,7 @@ body { display: flex; flex-direction: column; }
 .tt-desc { margin-top: 4px; line-height: 1.35; }
 .tt-data { margin-top: 4px; color: #444; font-size: 10px; font-weight: 600; }
 .tt-item { font-family: Consolas, Menlo, monospace; font-size: 9.5px; color: #333; }
+.tt-set { margin-top: 4px; color: #2f6b34; font-weight: 600; font-size: 10.5px; }
 .tt-error { margin-top: 4px; color: #a01212; font-weight: 600; }
 .tt-warn { margin-top: 4px; color: #9c6207; font-weight: 600; }
 
@@ -350,6 +430,8 @@ body { display: flex; flex-direction: column; }
 .ctx-header { font-weight: 700; background: #e4e4e8; color: #333; pointer-events: none; }
 .ctx-check { display: inline-block; width: 14px; font-weight: 700; }
 .ctx-danger:hover { background: #c0392b; }
+.ctx-sub { color: #4a7a3a; font-size: 10px; font-style: italic; }
+.ctx-item:hover .ctx-sub { color: #dff0d5; }
 .ctx-err { color: #a01212; font-size: 10.5px; white-space: normal; }
 .ctx-warntxt { color: #9c6207; font-size: 10.5px; white-space: normal; }
 .ctx-item:hover .ctx-err, .ctx-item:hover .ctx-warntxt { color: #fff; }

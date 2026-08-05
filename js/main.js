@@ -47,6 +47,13 @@ function updateStatus(views) {
       `max disp ${(a.maxDisp * 100).toFixed(2)} cm · max utilization ${(a.maxUtil * 100).toFixed(1)}% · ` +
       `mass ${a.mass.toFixed(0)} kg`;
     el.style.color = a.maxUtil > 1 ? '#ff8080' : '#c8e6b0';
+  } else if (engine.nodes.some(n => n.error)) {
+    const bad = engine.nodes.find(n => n.error);
+    el.textContent = `${bad.def.name}: ${bad.error}`;
+    el.style.color = '#ff8080';
+  } else if (statusNote) {
+    el.textContent = statusNote;
+    el.style.color = '#c8e6b0';
   } else {
     const anyModel = engine.nodes.some(n => n.type === 'Assemble');
     el.textContent = anyModel ? 'Model assembled — wire it into Analyze (Th.I) and a BeamView.' :
@@ -171,6 +178,137 @@ document.addEventListener('mousedown', e => {
   if (search.style.display === 'block' && !search.contains(e.target)) closeSearch();
 });
 
+/* ================= Rhino document geometry: layers + picking ================= */
+
+let graphDirty = false;   // true once the user has edited or loaded their own definition
+engine.onGraphEdit = () => { graphDirty = true; };
+
+const layersPanel = document.getElementById('layers-panel');
+const layersList = document.getElementById('layers-list');
+const layersDoc = document.getElementById('layers-doc');
+const pickPrompt = document.getElementById('pick-prompt');
+const pickText = document.getElementById('pick-text');
+const pickCount = document.getElementById('pick-count');
+
+const KIND_LABEL = { line: 'curves', point: 'points', mesh: 'meshes' };
+
+function buildLayersPanel() {
+  const g = window.__importedGeometry;
+  if (!g || !viewport.docObjects.length) { layersPanel.style.display = 'none'; return; }
+  layersPanel.style.display = 'block';
+  layersDoc.textContent = g.name.length > 22 ? g.name.slice(0, 20) + '…' : g.name;
+  layersDoc.title = g.name;
+  layersList.innerHTML = '';
+  for (const L of viewport.docLayers) {
+    const kinds = {};
+    for (const o of viewport.docObjects)
+      if (o.layerIndex === L.index) kinds[o.kind] = (kinds[o.kind] || 0) + 1;
+    const kindTxt = Object.entries(kinds).map(([k, v]) => `${v} ${KIND_LABEL[k] || k}`).join(', ');
+    const row = document.createElement('div');
+    row.className = 'layer-row';
+    row.title = `${L.path} — ${kindTxt}\nClick to select this layer's objects`;
+    row.innerHTML =
+      `<span class="layer-eye${L.visible === false ? ' off' : ''}">${L.visible === false ? '◌' : '👁'}</span>` +
+      `<span class="layer-swatch" style="background:#${(L.color >>> 0).toString(16).padStart(6, '0')}"></span>` +
+      `<span class="layer-name">${escapeHtml(L.name)}</span>` +
+      `<span class="layer-count">${L.count}</span>`;
+    row.querySelector('.layer-eye').onclick = (e) => {
+      e.stopPropagation();
+      viewport.setLayerVisible(L.index, L.visible === false);
+      buildLayersPanel();
+    };
+    row.onclick = () => {
+      viewport.selectLayer(L.index);
+      if (viewport.pickState) updatePickCount();
+      buildLayersPanel();
+    };
+    const selected = viewport.docObjects.some(o => o.layerIndex === L.index && viewport.selection.has(o.id));
+    if (selected) row.classList.add('sel');
+    layersList.appendChild(row);
+  }
+}
+
+viewport.onSelectionChange = () => { buildLayersPanel(); updatePickCount(); };
+
+function updatePickCount() {
+  if (!viewport.pickState) return;
+  const objs = viewport._selectedObjects();
+  const kinds = {};
+  for (const o of objs) kinds[o.kind] = (kinds[o.kind] || 0) + 1;
+  pickCount.textContent = objs.length
+    ? Object.entries(kinds).map(([k, v]) => `${v} ${KIND_LABEL[k] || k}`).join(', ') + ' selected'
+    : 'nothing selected yet';
+}
+
+/** Rhino-style pick session driven from a Grasshopper component. */
+async function runSetGeometry(node, portIdx, mode) {
+  const port = node.inputs[portIdx];
+  const filter = port.geo && port.geo !== 'any' ? port.geo : 'any';
+  if (!viewport.docObjects.length) {
+    alert('No Rhino geometry loaded yet.\n\nUse File ▸ Import Model… to open a .3dm first, then set geometry on this component.');
+    return;
+  }
+  closeCtxMenu();
+  const what = filter === 'any' ? 'geometry' : KIND_LABEL[filter] || filter;
+  pickPrompt.style.display = 'flex';
+  layersPanel.classList.add('picking');
+  pickText.textContent = mode === 'one'
+    ? `Select one ${filter === 'any' ? 'object' : filter} for ${node.def.nick} ▸ ${port.name}`
+    : `Select ${what} for ${node.def.nick} ▸ ${port.name} — click geometry (picks its whole layer), Alt+click for one object, or click a layer in the panel`;
+  updatePickCount();
+
+  const pickPromise = viewport.beginPick({
+    mode, filter,
+    onStatus: (msg) => { if (msg) pickText.textContent = msg; },
+  });
+  viewport.zoomExtents();          // frame the geometry being picked
+  const picked = await pickPromise;
+  pickPrompt.style.display = 'none';
+  layersPanel.classList.remove('picking');
+  if (!picked || !picked.length) return;
+
+  // convert Rhino objects → Grasshopper values
+  const vals = [];
+  for (const o of picked) {
+    if (o.kind === 'line') {
+      for (const s of o.segments)
+        vals.push({
+          kind: 'line',
+          a: { kind: 'point', x: s[0][0], y: s[0][1], z: s[0][2] },
+          b: { kind: 'point', x: s[1][0], y: s[1][1], z: s[1][2] },
+        });
+    } else if (o.kind === 'point') {
+      vals.push({ kind: 'point', x: o.point[0], y: o.point[1], z: o.point[2] });
+    } else if (o.kind === 'mesh') {
+      vals.push({ kind: 'mesh', vertices: o.mesh.vertices, faces: o.mesh.faces });
+    }
+  }
+  // internalise: like Grasshopper, setting data removes incoming wires
+  engine.disconnectInput(node, portIdx);
+  node.state.__persist = node.state.__persist || {};
+  node.state.__persist[portIdx] = vals;
+  const kinds = {};
+  for (const o of picked) kinds[o.kind] = (kinds[o.kind] || 0) + 1;
+  const layerNames = [...new Set(picked.map(o => (viewport.docLayers.find(l => l.index === o.layerIndex) || {}).name).filter(Boolean))];
+  node.state.__setLabel = node.state.__setLabel || {};
+  node.state.__setLabel[portIdx] =
+    `${Object.entries(kinds).map(([k, v]) => `${v} ${KIND_LABEL[k] || k}`).join(', ')}` +
+    (layerNames.length ? ` from layer ${layerNames.join(' + ')}` : '');
+  graphDirty = true;
+  statusNote = null;
+  engine._markDirty(node);
+  engine.scheduleSolve();
+  engine.draw();
+}
+
+document.getElementById('pick-accept').onclick = () => viewport.acceptPick();
+document.getElementById('pick-cancel').onclick = () => viewport.cancelPick();
+window.addEventListener('keydown', (e) => {
+  if (!viewport.pickState) return;
+  if (e.key === 'Enter') { e.preventDefault(); viewport.acceptPick(); }
+  if (e.key === 'Escape') { e.preventDefault(); viewport.cancelPick(); }
+});
+
 /* ================= hover tooltips (GH-style) ================= */
 
 const tooltip = document.createElement('div');
@@ -193,6 +331,8 @@ engine.onHover = (hit, cx, cy) => {
       vals = out == null ? [] : (Array.isArray(out) ? out : [out]);
     } else {
       vals = engine.inputValues(n, hit.port);
+      const setLbl = (n.state.__setLabel || {})[hit.port];
+      if (setLbl) html += `<div class="tt-set">⛁ set geometry: ${escapeHtml(setLbl)}</div>`;
       if (!vals.length && p.default !== undefined) {
         html += `<div class="tt-data">default: ${formatValue(p.default)}</div>`;
       }
@@ -251,6 +391,30 @@ engine.onNodeContext = (node, cx, cy) => {
   if (node.error) add(`<span class="ctx-err">✗ ${escapeHtml(node.error)}</span>`, null, {});
   if (node.warning) add(`<span class="ctx-warntxt">⚠ ${escapeHtml(node.warning)}</span>`, null, {});
   sep();
+  // ---- Set Geometry (Rhino picking), per geometry-capable input ----
+  const geoPorts = node.inputs
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => !!p.geo);
+  if (geoPorts.length) {
+    for (const { p, i } of geoPorts) {
+      const suffix = geoPorts.length > 1 ? ` (${p.name})` : '';
+      add(`Set one ${p.geo === 'any' ? 'Geometry' : p.geo}${suffix}`, () => runSetGeometry(node, i, 'one'));
+      add(`Set multiple ${p.geo === 'any' ? 'Geometries' : (KIND_LABEL[p.geo] || p.geo)}${suffix}`, () => runSetGeometry(node, i, 'multi'));
+      const has = node.state.__persist && node.state.__persist[i] && node.state.__persist[i].length;
+      if (has) {
+        const lbl = (node.state.__setLabel || {})[i];
+        add(`<span class="ctx-sub">holds ${escapeHtml(lbl || node.state.__persist[i].length + ' items')}</span>`, null, {});
+        add(`Clear ${p.name} data`, () => {
+          delete node.state.__persist[i];
+          if (node.state.__setLabel) delete node.state.__setLabel[i];
+          graphDirty = true;
+          engine._markDirty(node); engine.scheduleSolve(); engine.draw();
+        });
+      }
+    }
+    sep();
+  }
+
   add('Preview', () => { node.previewOff = !node.previewOff; engine.scheduleSolve(); }, { check: !node.previewOff });
   add('Enabled', () => {
     node.enabled = !node.enabled;
@@ -337,7 +501,10 @@ engine.onPanelEdit = (node) => openPanelEditor(node);
 
 const MENUS = {
   File: [
-    ['New Definition', () => { engine.nodes = []; engine.wires = []; engine.scheduleSolve(); }],
+    ['Default Script — Imported-Model Analysis', () => loadExample('imported')],
+    ['Default Script — Parametric Truss (startup)', () => loadExample('truss')],
+    ['—'],
+    ['New Definition', () => { engine.nodes = []; engine.wires = []; graphDirty = true; engine.scheduleSolve(); }],
     ['Import Model… (3DM / OBJ / DXF / JSON)', () => fileInput.click()],
     ['Open Grasshopper Definition… (.ghx)', () => ghInput.click()],
     ['—'],
@@ -429,6 +596,7 @@ ghInput.addEventListener('change', async () => {
   try {
     const parsed = parseGHX(new TextDecoder().decode(buf));
     const report = buildGraph(engine, parsed);
+    graphDirty = true;   // the user's own definition — protected from import resets
     // report panel on the canvas, GH-style
     const lines = [
       `◂ ${f.name} ▸`,
@@ -471,18 +639,63 @@ fileInput.addEventListener('change', async () => {
     alert('No line, point or mesh geometry found in file.\nFor .3dm: keep curves/lines, points and meshes (breps/surfaces are skipped — Mesh them in Rhino first).');
     return;
   }
+  if (!geo.objects) geo = synthesizeDocObjects(geo);
   window.__importedGeometry = { name: f.name, ...geo };
+
+  // show it in the viewport as Rhino document geometry (layers, pickable)
+  viewport.setDocument(geo);
+  buildLayersPanel();
+
   const existing = engine.nodes.find(n => n.type === 'ImportGeometry');
-  if (!existing) {
-    // no import node on the canvas yet: load a ready-made analysis definition
-    // wired onto the imported model (Import → LtoB → Support/Gravity → Analyze → BeamView)
-    loadExample('imported');
-  } else {
+  if (existing) {
+    // refresh whatever the user has wired — never touch their definition
     engine.nodes.forEach(n => { if (n.type === 'ImportGeometry') { n.dirty = true; engine._markDirty(n); } });
     engine.scheduleSolve();
+  } else if (!graphDirty) {
+    // untouched startup example → drop in the ready-made analysis definition
+    loadExample('imported');
+  } else {
+    // the user's own definition is on the canvas: leave it alone, just re-solve
+    engine.nodes.forEach(n => { n.dirty = true; });
+    engine.scheduleSolve();
+    const lay = geo.layers.map(L => `${L.name} (${L.count})`).join(', ');
+    setStatusNote(`Loaded ${f.name} — layers: ${lay}. Right-click a component ▸ Set Geometry to bind it.`);
   }
+  setTimeout(() => viewport.zoomExtents(), 250);
   fileInput.value = '';
 });
+
+let statusNote = null;
+function setStatusNote(txt) {
+  statusNote = txt;
+  const el = document.getElementById('status-text');
+  if (txt) { el.textContent = txt; el.style.color = '#c8e6b0'; }
+}
+
+/** OBJ/DXF/JSON have no layers: build one object per line/point/mesh on synthetic layers. */
+function synthesizeDocObjects(geo) {
+  const objects = [];
+  const layers = [];
+  const layerFor = (name, color) => {
+    let L = layers.find(l => l.name === name);
+    if (!L) { L = { index: layers.length, name, path: name, color, visible: true, count: 0 }; layers.push(L); }
+    return L;
+  };
+  for (const l of geo.lines || []) {
+    const L = layerFor('lines', 0x1f1f1f);
+    objects.push({ id: objects.length, layerIndex: L.index, kind: 'line', segments: [l] });
+  }
+  for (const p of geo.points || []) {
+    const L = layerFor('points', 0x2b6cb0);
+    objects.push({ id: objects.length, layerIndex: L.index, kind: 'point', point: p });
+  }
+  for (const m of geo.meshes || []) {
+    const L = layerFor('meshes', 0x8d5a3b);
+    objects.push({ id: objects.length, layerIndex: L.index, kind: 'mesh', mesh: m });
+  }
+  for (const o of objects) layers[o.layerIndex].count++;
+  return { ...geo, objects, layers };
+}
 
 function parseOBJ(text) {
   const verts = [];
@@ -545,33 +758,63 @@ function unitScale(rh, us) {
   return null;
 }
 
+/**
+ * Parse a Rhino .3dm, preserving object identity and layer membership.
+ * Returns flat lines/points/meshes (in meters, for the Import component) plus
+ * `objects` (one entry per Rhino object, layer-tagged, for viewport picking)
+ * and the document's `layers` table.
+ */
 async function parse3dm(buffer) {
   const rh = await loadRhino3dm();
   const doc = rh.File3dm.fromByteArray(new Uint8Array(buffer));
   if (!doc) throw new Error('not a valid Rhino .3dm file');
   let scale = unitScale(rh, doc.settings().modelUnitSystem);
 
-  const lines = [], meshes = [], points = [];
+  // ---- layer table ----
+  const layerTable = [];
+  try {
+    const lt = doc.layers();
+    for (let i = 0; i < lt.count; i++) {
+      const L = lt.get(i);
+      const c = L.color || { r: 0, g: 0, b: 0 };
+      layerTable.push({
+        index: i,
+        name: L.name || `Layer ${i}`,
+        path: L.fullPath || L.name || `Layer ${i}`,
+        color: (c.r << 16) | (c.g << 8) | c.b,
+        visible: L.visible !== false,
+        count: 0,
+      });
+    }
+  } catch { /* older files may lack a layer table */ }
+
+  const objects = [];   // {id, layerIndex, kind, segments|point|mesh}
   let skipped = 0;
   const objs = doc.objects();
 
-  // pass 1: raw extraction in document units
-  const rawCurves = [];   // arrays of polyline points
+  // ---- pass 1: raw extraction in document units, keeping object identity ----
+  const raw = [];
   for (let i = 0; i < objs.count; i++) {
-    let geom;
-    try { geom = objs.get(i).geometry(); } catch { continue; }
+    let geom, layerIndex = 0, objName = '';
+    try {
+      const o = objs.get(i);
+      geom = o.geometry();
+      const at = o.attributes();
+      layerIndex = at.layerIndex ?? 0;
+      objName = at.name || '';
+    } catch { continue; }
     if (!geom) continue;
     try {
       if (geom instanceof rh.Point) {
-        points.push(pt3(geom.location));
+        raw.push({ kind: 'point', layerIndex, name: objName, pt: pt3(geom.location) });
       } else if (geom instanceof rh.LineCurve) {
         const a = typeof geom.pointAtStart === 'function' ? geom.pointAtStart() : geom.pointAtStart;
         const b = typeof geom.pointAtEnd === 'function' ? geom.pointAtEnd() : geom.pointAtEnd;
-        rawCurves.push([pt3(a), pt3(b)]);
+        raw.push({ kind: 'poly', layerIndex, name: objName, pts: [pt3(a), pt3(b)] });
       } else if (geom instanceof rh.PolylineCurve) {
         const pts = [];
         for (let k = 0; k < geom.pointCount; k++) pts.push(pt3(geom.point(k)));
-        rawCurves.push(pts);
+        raw.push({ kind: 'poly', layerIndex, name: objName, pts });
       } else if (geom instanceof rh.Mesh) {
         const vl = geom.vertices(), fl = geom.faces();
         const vertices = [];
@@ -582,7 +825,7 @@ async function parse3dm(buffer) {
           if (f[2] !== f[3]) faces.push([f[0], f[1], f[2]], [f[0], f[2], f[3]]);
           else faces.push([f[0], f[1], f[2]]);
         }
-        meshes.push({ vertices, faces });
+        raw.push({ kind: 'mesh', layerIndex, name: objName, vertices, faces });
       } else if (geom instanceof rh.Curve) {
         // arcs, nurbs, polycurves: adaptive sample — estimate length first
         const dom = geom.domain;
@@ -592,55 +835,83 @@ async function parse3dm(buffer) {
         let len = 0;
         for (let k = 1; k < probe.length; k++)
           len += Math.hypot(probe[k][0] - probe[k - 1][0], probe[k][1] - probe[k - 1][1], probe[k][2] - probe[k - 1][2]);
-        rawCurves.push({ curve: geom, t0, t1, len, keep: true });
-        continue; // keep geom alive for pass 2
+        raw.push({ kind: 'curve', layerIndex, name: objName, curve: geom, t0, t1, len });
       } else {
         skipped++;
       }
     } catch { skipped++; }
   }
 
-  // unit fallback heuristic when the file has no usable unit system
+  // ---- unit fallback heuristic when the file declares no usable unit system ----
   if (!scale) {
     let maxAbs = 0;
     const upd = p => { maxAbs = Math.max(maxAbs, Math.abs(p[0]), Math.abs(p[1]), Math.abs(p[2])); };
-    for (const c of rawCurves) (Array.isArray(c) ? c : []).forEach(upd);
-    points.forEach(upd);
+    for (const r of raw) {
+      if (r.pts) r.pts.forEach(upd);
+      else if (r.pt) upd(r.pt);
+      else if (r.vertices) r.vertices.forEach(upd);
+    }
     scale = maxAbs > 5000 ? 0.001 : maxAbs > 500 ? 0.01 : 1;
     console.warn(`3dm import: unit system unknown — assuming scale ${scale} (→ m)`);
   }
 
-  // pass 2: convert to meters; sample curved members by arc length (~0.35 m target, min 2 segs)
+  // ---- pass 2: convert to meters; sample curves by arc length (~0.35 m target) ----
   const S = scale;
   const targetSeg = 0.35;
-  for (const c of rawCurves) {
-    if (Array.isArray(c)) {
-      for (let k = 0; k < c.length - 1; k++) {
-        lines.push([
-          [c[k][0] * S, c[k][1] * S, c[k][2] * S],
-          [c[k + 1][0] * S, c[k + 1][1] * S, c[k + 1][2] * S],
-        ]);
-      }
+  const lines = [], points = [], meshes = [];
+
+  for (const r of raw) {
+    const layerIndex = r.layerIndex;
+    if (r.kind === 'point') {
+      const p = [r.pt[0] * S, r.pt[1] * S, r.pt[2] * S];
+      points.push(p);
+      objects.push({ id: objects.length, layerIndex, name: r.name, kind: 'point', point: p });
+    } else if (r.kind === 'mesh') {
+      const mesh = {
+        vertices: r.vertices.map(p => [p[0] * S, p[1] * S, p[2] * S]),
+        faces: r.faces,
+      };
+      meshes.push(mesh);
+      objects.push({ id: objects.length, layerIndex, name: r.name, kind: 'mesh', mesh });
     } else {
-      const lenM = c.len * S;
-      const N = Math.max(2, Math.min(32, Math.ceil(lenM / targetSeg)));
-      let prev = pt3(c.curve.pointAt(c.t0)).map(v => v * S);
-      for (let k = 1; k <= N; k++) {
-        const p = pt3(c.curve.pointAt(c.t0 + (c.t1 - c.t0) * k / N)).map(v => v * S);
-        lines.push([prev, p]);
-        prev = p;
+      const segs = [];
+      if (r.kind === 'poly') {
+        for (let k = 0; k < r.pts.length - 1; k++) {
+          segs.push([
+            [r.pts[k][0] * S, r.pts[k][1] * S, r.pts[k][2] * S],
+            [r.pts[k + 1][0] * S, r.pts[k + 1][1] * S, r.pts[k + 1][2] * S],
+          ]);
+        }
+      } else {
+        const lenM = r.len * S;
+        const N = Math.max(2, Math.min(32, Math.ceil(lenM / targetSeg)));
+        let prev = pt3(r.curve.pointAt(r.t0)).map(v => v * S);
+        for (let k = 1; k <= N; k++) {
+          const p = pt3(r.curve.pointAt(r.t0 + (r.t1 - r.t0) * k / N)).map(v => v * S);
+          segs.push([prev, p]);
+          prev = p;
+        }
       }
+      if (!segs.length) continue;
+      for (const s of segs) lines.push(s);
+      objects.push({ id: objects.length, layerIndex, name: r.name, kind: 'line', segments: segs });
     }
   }
-  const ptsM = points.map(p => [p[0] * S, p[1] * S, p[2] * S]);
-  const meshesM = meshes.map(m => ({
-    vertices: m.vertices.map(p => [p[0] * S, p[1] * S, p[2] * S]),
-    faces: m.faces,
-  }));
+
+  // per-layer object counts
+  for (const o of objects) {
+    const L = layerTable[o.layerIndex];
+    if (L) L.count++;
+  }
+  const usedLayers = layerTable.filter(L => L.count > 0);
 
   if (doc.delete) doc.delete();
   if (skipped) console.warn(`3dm import: skipped ${skipped} unsupported objects (breps/surfaces — mesh them in Rhino first)`);
-  return { lines, meshes: meshesM, points: ptsM, scale: S };
+  return {
+    lines, meshes, points, scale: S,
+    objects,
+    layers: usedLayers.length ? usedLayers : layerTable,
+  };
 }
 
 function parseDXF(text) {
@@ -686,6 +957,7 @@ defInput.addEventListener('change', async () => {
   if (!f) return;
   try {
     engine.loadJSON(JSON.parse(await f.text()));
+    graphDirty = true;
     setTimeout(() => engine.zoomExtents(), 100);
   } catch (err) { alert('Could not load definition: ' + err.message); }
   defInput.value = '';
@@ -925,6 +1197,9 @@ function loadExample(which) {
   }
 
   setTimeout(() => { engine.zoomExtents(); viewport.zoomExtents(); }, which === 'imported' ? 500 : 150);
+  // a freshly-loaded example is "pristine" — importing a model may replace it,
+  // but once the user edits it or loads their own definition it is protected
+  graphDirty = false;
 }
 
 /* ================= boot ================= */

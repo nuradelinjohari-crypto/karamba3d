@@ -64,6 +64,30 @@ beam section **CHS Ø 114.3 × 4 mm** when nothing is wired in.
   listed in an import report panel. Binary .gh files must be re-saved as .ghx in
   Grasshopper (File ▸ Save As ▸ "Grasshopper XML") — same archive, XML flavor.
 
+## Rhino-side workflow: your own model, your own definition
+
+The right pane behaves like a Rhino viewport holding your document geometry:
+
+1. **File ▸ Import Model…** a `.3dm`. It is drawn as Rhino wireframe (layer colours,
+   square point markers) and **stays grouped by layer** — a Rhino-style **Layers panel**
+   lists every layer with its colour, object count and an eye toggle.
+2. **Click any object** in the viewport and its whole layer-group highlights yellow
+   (click a line → all the model's lines). Clicking a layer row selects that layer.
+3. On the canvas, **right-click a component ▸ Set one … / Set multiple …** (offered for
+   every geometry input: Line To Beam ▸ Line, Support ▸ Position, Mesh To Shell ▸ Mesh,
+   Point-Load ▸ Position, Geometry params, …). The viewport enters a Rhino-style pick
+   session — the Grasshopper preview hides, a command prompt appears, and you click
+   geometry (or a layer) then press **Enter** to accept, **Esc** to cancel.
+   Alt+click picks a single object instead of its layer.
+4. The component internalises that geometry (its input nub turns solid green, exactly
+   like Grasshopper's internalised params, and any incoming wire is removed), the
+   definition re-solves, and the analysis appears over your model.
+
+**Importing a model never rewrites your canvas.** Once you have loaded your own `.ghx`
+or edited the definition, an import only refreshes the geometry. The ready-made
+starting definitions remain under **File ▸ Default Script** (Imported-Model Analysis,
+and the parametric truss the app starts with).
+
 ## Using it
 
 1. **Examples menu** → Parametric Truss Bridge / 3D Portal Frame Tower / Simple Cantilever.

@@ -89,7 +89,7 @@ def({
   category: 'Params',
   desc: 'Allows for customized geometry previews: displays the geometry in the given colour in the viewport (like Grasshopper\'s Custom Preview).',
   inputs: [
-    { name: 'Geometry', nick: 'G', required: true },
+    { name: 'Geometry', nick: 'G', required: true, geo: 'any' },
     { name: 'Material / Colour', nick: 'M' },
   ],
   outputs: [],
@@ -113,7 +113,7 @@ def({
   type: 'GeoParam', name: 'Geometry', nick: 'Geo',
   category: 'Params',
   desc: 'Pass-through container for geometry (Curve / Point / Mesh param from an imported Grasshopper file). Referenced Rhino geometry is re-bound to the imported .3dm model.',
-  inputs: [{ name: 'In', nick: '' }], outputs: [{ name: 'Out', nick: '' }],
+  inputs: [{ name: 'In', nick: '', geo: 'any' }], outputs: [{ name: 'Out', nick: '' }],
   defaultState: () => ({ paramKind: 'geometry', origName: '' }),
   solve: (ins) => ({ Out: ins[0] }),
 });
@@ -259,7 +259,7 @@ def({
   type: 'Deconstruct', name: 'Deconstruct', nick: 'pDecon',
   category: 'Maths',
   desc: 'Deconstruct a point into its {x, y, z} coordinates.',
-  inputs: [{ name: 'Point', nick: 'P', required: true }],
+  inputs: [{ name: 'Point', nick: 'P', required: true, geo: 'point' }],
   outputs: [{ name: 'X component', nick: 'X' }, { name: 'Y component', nick: 'Y' }, { name: 'Z component', nick: 'Z' }],
   solve: (ins) => {
     const pts = ins[0].map(asPoint).filter(Boolean);
@@ -276,7 +276,7 @@ def({
   category: 'Curve',
   desc: 'Translate geometry along a vector (points, lines and meshes).',
   inputs: [
-    { name: 'Geometry', nick: 'G', required: true },
+    { name: 'Geometry', nick: 'G', required: true, geo: 'any' },
     { name: 'Motion', nick: 'T' },
   ],
   outputs: [{ name: 'Geometry', nick: 'G' }],
@@ -300,7 +300,7 @@ def({
   category: 'Curve',
   desc: 'Create a polyline through a list of vertex points (output as line segments).',
   inputs: [
-    { name: 'Vertices', nick: 'V', required: true },
+    { name: 'Vertices', nick: 'V', required: true, geo: 'point' },
     { name: 'Closed', nick: 'C', default: false },
   ],
   outputs: [{ name: 'Polyline', nick: 'Pl' }],
@@ -318,7 +318,7 @@ def({
   type: 'Explode', name: 'Explode', nick: 'Explode',
   category: 'Curve',
   desc: 'Explode curves into segments and vertices.',
-  inputs: [{ name: 'Curve', nick: 'C', required: true }],
+  inputs: [{ name: 'Curve', nick: 'C', required: true, geo: 'line' }],
   outputs: [{ name: 'Segments', nick: 'S' }, { name: 'Vertices', nick: 'V' }],
   solve: (ins) => {
     const lines = asLines(ins[0]);
@@ -374,8 +374,8 @@ def({
   type: 'Line', name: 'Line', nick: 'Ln',
   category: 'Curve',
   inputs: [
-    { name: 'Start Point', nick: 'A', required: true },
-    { name: 'End Point', nick: 'B', required: true },
+    { name: 'Start Point', nick: 'A', required: true, geo: 'point' },
+    { name: 'End Point', nick: 'B', required: true, geo: 'point' },
   ],
   outputs: [{ name: 'Line', nick: 'L' }],
   solve: (ins) => {
@@ -547,7 +547,7 @@ def({
   type: 'LineToBeam', name: 'Line To Beam', nick: 'LtoB',
   category: 'Karamba3D|Model',
   inputs: [
-    { name: 'Line', nick: 'Line', required: true },
+    { name: 'Line', nick: 'Line', required: true, geo: 'line' },
     { name: 'Identifier', nick: 'Id', default: '' },
     { name: 'CroSec', nick: 'CroSec' },
   ],
@@ -575,7 +575,7 @@ def({
   type: 'BottomPoints', name: 'Bottom Points', nick: 'BotPts',
   category: 'Karamba3D|Utils',
   inputs: [
-    { name: 'Points', nick: 'Pts', required: true },
+    { name: 'Points', nick: 'Pts', required: true, geo: 'point' },
     { name: 'Tolerance [m]', nick: 'Tol', default: 0.05 },
   ],
   outputs: [{ name: 'Bottom Points', nick: 'Bot' }, { name: 'Count', nick: 'N' }],
@@ -593,7 +593,7 @@ def({
   type: 'Support', name: 'Support', nick: 'Supp',
   category: 'Karamba3D|Model',
   extraH: 34,
-  inputs: [{ name: 'Position', nick: 'Pos', required: true }],
+  inputs: [{ name: 'Position', nick: 'Pos', required: true, geo: 'point' }],
   outputs: [{ name: 'Support', nick: 'Supp' }],
   defaultState: () => ({ fix: [true, true, true, false, false, false] }),
   drawExtra(ctx, n) {
@@ -642,7 +642,7 @@ def({
   type: 'MeshToShell', name: 'Mesh To Shell', nick: 'MtoS',
   category: 'Karamba3D|Model',
   inputs: [
-    { name: 'Mesh', nick: 'Mesh', required: true },
+    { name: 'Mesh', nick: 'Mesh', required: true, geo: 'mesh' },
     { name: 'Identifier', nick: 'Id', default: '' },
     { name: 'CroSec', nick: 'CroSec' },
   ],
@@ -676,7 +676,7 @@ def({
   type: 'PointLoad', name: 'Point-Load', nick: 'PLoad',
   category: 'Karamba3D|Load',
   inputs: [
-    { name: 'Position', nick: 'Pos', required: true },
+    { name: 'Position', nick: 'Pos', required: true, geo: 'point' },
     { name: 'Force [kN]', nick: 'Force' },
     { name: 'Moment [kNm]', nick: 'Moment' },
   ],
@@ -707,7 +707,7 @@ def({
   category: 'Karamba3D|Load',
   desc: 'Uniformly distributed load [kN/m]. With lines wired in it loads the beams on those lines; with no lines it applies to ALL elements (like Karamba with an empty Elems|Ids).',
   inputs: [
-    { name: 'Line', nick: 'Line' },
+    { name: 'Line', nick: 'Line', geo: 'line' },
     { name: 'Force [kN/m]', nick: 'Vec' },
   ],
   outputs: [{ name: 'Load', nick: 'Load' }],

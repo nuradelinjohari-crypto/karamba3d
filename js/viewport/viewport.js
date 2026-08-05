@@ -88,6 +88,20 @@ export class Viewport {
     this.modelGroup = new THREE.Group();
     this.scene.add(this.modelGroup);
 
+    // Rhino "document" geometry (the imported .3dm) — always present & pickable
+    this.docGroup = new THREE.Group();
+    this.scene.add(this.docGroup);
+    this.doc = null;
+    this.docObjects = [];
+    this.docLayers = [];
+    this.docVisible = true;
+    this.selection = new Set();      // selected doc-object ids
+    this.pickState = null;           // active Set-Geometry pick session
+    this.onSelectionChange = () => {};
+
+    this.raycaster = new THREE.Raycaster();
+    this._initPicking();
+
     this._resize();
     new ResizeObserver(() => this._resize()).observe(container);
 
@@ -168,6 +182,351 @@ export class Viewport {
     this.renderer.autoClear = true;
   }
 
+  /* ================= Rhino document geometry + picking ================= */
+
+  /**
+   * Install the imported .3dm as the viewport's document geometry.
+   * @param geo {objects, layers, name} from parse3dm
+   */
+  setDocument(geo) {
+    this.doc = geo || null;
+    this.docObjects = (geo && geo.objects) || [];
+    this.docLayers = (geo && geo.layers) || [];
+    this.selection.clear();
+    this._buildDocGroup();
+    this.onSelectionChange([...this.selection]);
+  }
+
+  _disposeGroup(g) {
+    g.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+    });
+    g.clear();
+  }
+
+  _buildDocGroup() {
+    this._disposeGroup(this.docGroup);
+    this.docLineObj = null;
+    this.docPointObj = null;
+    if (!this.docObjects.length) return;
+
+    // model size → picking thresholds and point size
+    const bb = new THREE.Box3();
+    const v = new THREE.Vector3();
+    for (const o of this.docObjects) {
+      if (o.kind === 'line') for (const s of o.segments) { bb.expandByPoint(v.set(...s[0])); bb.expandByPoint(v.set(...s[1])); }
+      else if (o.kind === 'point') bb.expandByPoint(v.set(...o.point));
+      else if (o.kind === 'mesh') for (const p of o.mesh.vertices) bb.expandByPoint(v.set(...p));
+    }
+    const diag = bb.isEmpty() ? 10 : bb.getSize(new THREE.Vector3()).length();
+    this.docDiag = diag;
+    this.raycaster.params.Line = { threshold: diag * 0.006 };
+    this.raycaster.params.Points = { threshold: diag * 0.010 };
+
+    const layerColor = (li) => {
+      const L = this.docLayers.find(l => l.index === li);
+      let c = L ? L.color : 0x1a1a1a;
+      // Rhino draws pure-black layers as black wires; keep them visible on gray
+      if (c === 0xffffff) c = 0x2a2a2a;
+      return new THREE.Color(c === 0 ? 0x1f1f1f : c);
+    };
+
+    /* ---- lines: one merged LineSegments, vertex-coloured, seg→object map ---- */
+    const lp = [], lc = [], segObj = [];
+    for (const o of this.docObjects) {
+      if (o.kind !== 'line') continue;
+      const col = layerColor(o.layerIndex);
+      for (const s of o.segments) {
+        lp.push(s[0][0], s[0][1], s[0][2], s[1][0], s[1][1], s[1][2]);
+        lc.push(col.r, col.g, col.b, col.r, col.g, col.b);
+        segObj.push(o.id);
+      }
+    }
+    if (lp.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(lc, 3));
+      const mesh = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true }));
+      mesh.userData = { docKind: 'line', segObj };
+      mesh.renderOrder = 1;
+      this.docGroup.add(mesh);
+      this.docLineObj = mesh;
+    }
+
+    /* ---- points ---- */
+    const pp = [], pc = [], ptObj = [];
+    for (const o of this.docObjects) {
+      if (o.kind !== 'point') continue;
+      const col = layerColor(o.layerIndex);
+      pp.push(o.point[0], o.point[1], o.point[2]);
+      pc.push(col.r, col.g, col.b);
+      ptObj.push(o.id);
+    }
+    if (pp.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pp, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(pc, 3));
+      const pts = new THREE.Points(g, new THREE.PointsMaterial({
+        vertexColors: true, size: 6, sizeAttenuation: false,
+      }));
+      pts.userData = { docKind: 'point', ptObj };
+      pts.renderOrder = 2;
+      this.docGroup.add(pts);
+      this.docPointObj = pts;
+    }
+
+    /* ---- meshes (one per object, so picking maps directly) ---- */
+    for (const o of this.docObjects) {
+      if (o.kind !== 'mesh') continue;
+      const pos = [];
+      for (const f of o.mesh.faces)
+        for (const i of f) pos.push(o.mesh.vertices[i][0], o.mesh.vertices[i][1], o.mesh.vertices[i][2]);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+        color: layerColor(o.layerIndex), side: THREE.DoubleSide,
+        transparent: true, opacity: 0.75,
+      }));
+      m.userData = { docKind: 'mesh', objId: o.id };
+      this.docGroup.add(m);
+    }
+
+    this.docGroup.visible = this.docVisible;
+    this._applyLayerVisibility();
+  }
+
+  setDocVisible(on) {
+    this.docVisible = !!on;
+    this.docGroup.visible = this.docVisible;
+  }
+
+  setLayerVisible(layerIndex, on) {
+    const L = this.docLayers.find(l => l.index === layerIndex);
+    if (L) L.visible = !!on;
+    this._applyLayerVisibility();
+  }
+
+  /** Hidden layers are collapsed to zero-length segments / off-screen points. */
+  _applyLayerVisibility() {
+    const hidden = new Set(this.docLayers.filter(l => l.visible === false).map(l => l.index));
+    const objHidden = (id) => hidden.has(this.docObjects[id]?.layerIndex);
+    if (this.docLineObj) {
+      const { segObj } = this.docLineObj.userData;
+      const posAttr = this.docLineObj.geometry.getAttribute('position');
+      if (!this.docLineObj.userData.origPos) this.docLineObj.userData.origPos = posAttr.array.slice();
+      const orig = this.docLineObj.userData.origPos;
+      const arr = posAttr.array;
+      for (let s = 0; s < segObj.length; s++) {
+        const base = s * 6;
+        if (objHidden(segObj[s])) {
+          for (let k = 0; k < 6; k++) arr[base + k] = orig[base];   // degenerate → invisible
+        } else {
+          for (let k = 0; k < 6; k++) arr[base + k] = orig[base + k];
+        }
+      }
+      posAttr.needsUpdate = true;
+      this.docLineObj.geometry.computeBoundingSphere();
+    }
+    if (this.docPointObj) {
+      const { ptObj } = this.docPointObj.userData;
+      const posAttr = this.docPointObj.geometry.getAttribute('position');
+      if (!this.docPointObj.userData.origPos) this.docPointObj.userData.origPos = posAttr.array.slice();
+      const orig = this.docPointObj.userData.origPos;
+      const arr = posAttr.array;
+      for (let p = 0; p < ptObj.length; p++) {
+        const h = objHidden(ptObj[p]);
+        for (let k = 0; k < 3; k++) arr[p * 3 + k] = h ? NaN : orig[p * 3 + k];
+      }
+      posAttr.needsUpdate = true;
+    }
+    for (const child of this.docGroup.children) {
+      if (child.userData && child.userData.docKind === 'mesh')
+        child.visible = !objHidden(child.userData.objId);
+    }
+  }
+
+  _initPicking() {
+    const el = this.renderer.domElement;
+    let downX = 0, downY = 0, downT = 0;
+    el.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; downT = Date.now(); });
+    el.addEventListener('pointerup', (e) => {
+      if (e.button !== 0) return;
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved > 4 || Date.now() - downT > 600) return;   // orbiting, not clicking
+      this._handleClick(e);
+    });
+  }
+
+  _pickAt(clientX, clientY) {
+    if (!this.docObjects.length) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - r.left) / r.width) * 2 - 1,
+      -((clientY - r.top) / r.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.docGroup.children, false);
+    const hiddenLayer = new Set(this.docLayers.filter(l => l.visible === false).map(l => l.index));
+    for (const h of hits) {
+      const ud = h.object.userData || {};
+      let objId = null;
+      if (ud.docKind === 'line') objId = ud.segObj[Math.floor(h.index / 2)];
+      else if (ud.docKind === 'point') objId = ud.ptObj[h.index];
+      else if (ud.docKind === 'mesh') objId = ud.objId;
+      if (objId == null) continue;
+      const o = this.docObjects[objId];
+      if (!o || hiddenLayer.has(o.layerIndex)) continue;
+      return o;
+    }
+    return null;
+  }
+
+  /** All doc objects on the same layer with the same kind as `o` (Rhino-ish group select). */
+  _layerGroup(o) {
+    return this.docObjects
+      .filter(d => d.layerIndex === o.layerIndex && d.kind === o.kind)
+      .map(d => d.id);
+  }
+
+  _handleClick(e) {
+    const hit = this._pickAt(e.clientX, e.clientY);
+    const ps = this.pickState;
+
+    if (!ps) {
+      // normal browsing: click selects the clicked object's layer group
+      if (!hit) { this.selection.clear(); }
+      else {
+        const grp = this._layerGroup(hit);
+        const already = grp.every(id => this.selection.has(id));
+        if (!e.shiftKey) this.selection.clear();
+        if (already && e.shiftKey) grp.forEach(id => this.selection.delete(id));
+        else grp.forEach(id => this.selection.add(id));
+      }
+      this._applySelection();
+      this.onSelectionChange([...this.selection]);
+      return;
+    }
+
+    // active Set-Geometry pick
+    if (!hit) return;
+    if (ps.filter !== 'any' && hit.kind !== ps.filter) {
+      ps.onStatus(`That is a ${hit.kind}; this input needs ${ps.filter} geometry.`);
+      return;
+    }
+    if (ps.mode === 'one') {
+      this.selection.clear();
+      this.selection.add(hit.id);
+      this._applySelection();
+      ps.resolve(this._selectedObjects());
+      this.endPick();
+      return;
+    }
+    // multiple: clicking takes the whole layer group; Alt/Shift+click takes just
+    // the clicked object (so a few base points can be picked out of a layer)
+    const grp = (e.altKey || e.shiftKey) ? [hit.id] : this._layerGroup(hit);
+    const all = grp.every(id => this.selection.has(id));
+    if (all) grp.forEach(id => this.selection.delete(id));
+    else grp.forEach(id => this.selection.add(id));
+    this._applySelection();
+    ps.onStatus(null);
+    this.onSelectionChange([...this.selection]);
+  }
+
+  _selectedObjects() {
+    return [...this.selection].map(id => this.docObjects[id]).filter(Boolean);
+  }
+
+  _applySelection() {
+    const SEL = new THREE.Color(0xffe000);
+    const layerColor = (li) => {
+      const L = this.docLayers.find(l => l.index === li);
+      let c = L ? L.color : 0x1a1a1a;
+      if (c === 0xffffff) c = 0x2a2a2a;
+      return new THREE.Color(c === 0 ? 0x1f1f1f : c);
+    };
+    if (this.docLineObj) {
+      const { segObj } = this.docLineObj.userData;
+      const colAttr = this.docLineObj.geometry.getAttribute('color');
+      for (let s = 0; s < segObj.length; s++) {
+        const o = this.docObjects[segObj[s]];
+        const c = this.selection.has(segObj[s]) ? SEL : layerColor(o.layerIndex);
+        colAttr.setXYZ(s * 2, c.r, c.g, c.b);
+        colAttr.setXYZ(s * 2 + 1, c.r, c.g, c.b);
+      }
+      colAttr.needsUpdate = true;
+    }
+    if (this.docPointObj) {
+      const { ptObj } = this.docPointObj.userData;
+      const colAttr = this.docPointObj.geometry.getAttribute('color');
+      for (let p = 0; p < ptObj.length; p++) {
+        const o = this.docObjects[ptObj[p]];
+        const c = this.selection.has(ptObj[p]) ? SEL : layerColor(o.layerIndex);
+        colAttr.setXYZ(p, c.r, c.g, c.b);
+      }
+      colAttr.needsUpdate = true;
+    }
+    for (const child of this.docGroup.children) {
+      if (child.userData && child.userData.docKind === 'mesh')
+        child.material.color.set(this.selection.has(child.userData.objId)
+          ? SEL : layerColor(this.docObjects[child.userData.objId].layerIndex));
+    }
+  }
+
+  /**
+   * Start a Set-Geometry pick session (Rhino-style "select objects" prompt).
+   * @returns Promise<Array<docObject>|null>  null = cancelled
+   */
+  beginPick({ mode = 'multi', filter = 'any', onStatus = () => {} } = {}) {
+    this.endPick(true);
+    this.selection.clear();
+    this._applySelection();
+    // GH hides its own preview while you pick document geometry
+    this.modelGroup.visible = false;
+    this._pickDocWasVisible = this.docVisible;
+    this.setDocVisible(true);
+    return new Promise((resolve) => {
+      this.pickState = { mode, filter, onStatus, resolve };
+      this.renderer.domElement.style.cursor = 'crosshair';
+    });
+  }
+
+  acceptPick() {
+    if (!this.pickState) return;
+    const sel = this._selectedObjects();
+    const res = this.pickState.resolve;
+    this.endPick();
+    res(sel);
+  }
+
+  cancelPick() {
+    if (!this.pickState) return;
+    const res = this.pickState.resolve;
+    this.selection.clear();
+    this._applySelection();
+    this.endPick();
+    res(null);
+  }
+
+  endPick() {
+    this.pickState = null;
+    this.modelGroup.visible = true;
+    if (this._pickDocWasVisible !== undefined) {
+      this.setDocVisible(this._pickDocWasVisible);
+      this._pickDocWasVisible = undefined;
+    }
+    this.renderer.domElement.style.cursor = '';
+  }
+
+  selectLayer(layerIndex, kind = null) {
+    this.selection.clear();
+    for (const o of this.docObjects)
+      if (o.layerIndex === layerIndex && (!kind || o.kind === kind)) this.selection.add(o.id);
+    this._applySelection();
+    this.onSelectionChange([...this.selection]);
+    return this._selectedObjects();
+  }
+
   /* ------------- content ------------- */
 
   clear() {
@@ -203,6 +562,7 @@ export class Viewport {
       const fem = view.model && view.model.fem;
       if (fem) for (const nd of fem.nodes) bbp(nd.x, nd.y, nd.z);
     }
+    if (bb.isEmpty() && this.docDiag) bb.expandByPoint(new THREE.Vector3(this.docDiag, this.docDiag, this.docDiag));
     const diag = bb.isEmpty() ? 10 : bb.getSize(new THREE.Vector3()).length();
     this.symScale = Math.max(0.02, Math.min(diag * 0.022, 0.6));
 
@@ -375,7 +735,9 @@ export class Viewport {
       lo = -mx; hi = mx;
     }
 
-    // ghost of undeformed geometry
+    // ghost of undeformed geometry — skipped when the Rhino document geometry
+    // is on screen (it already shows the undeformed model, like Rhino + GH)
+    const showGhost = !(this.docVisible && this.docObjects.length);
     const ghostVerts = [];
     for (const el of fem.elements) {
       const p0 = fem.nodes[el.n0], p1 = fem.nodes[el.n1];
@@ -388,10 +750,12 @@ export class Viewport {
         ghostVerts.push(p[i].x, p[i].y, p[i].z, q.x, q.y, q.z);
       }
     }
-    const gg = new THREE.BufferGeometry();
-    gg.setAttribute('position', new THREE.Float32BufferAttribute(ghostVerts, 3));
-    this.modelGroup.add(new THREE.LineSegments(gg,
-      new THREE.LineBasicMaterial({ color: 0x606468, transparent: true, opacity: 0.35 })));
+    if (showGhost && ghostVerts.length) {
+      const gg = new THREE.BufferGeometry();
+      gg.setAttribute('position', new THREE.Float32BufferAttribute(ghostVerts, 3));
+      this.modelGroup.add(new THREE.LineSegments(gg,
+        new THREE.LineBasicMaterial({ color: 0x606468, transparent: true, opacity: 0.35 })));
+    }
 
     // deformed colored beams
     a.results.forEach((r, i) => {
@@ -492,15 +856,18 @@ export class Viewport {
   zoomExtents(views, previews) {
     const box = new THREE.Box3();
     let has = false;
-    this.modelGroup.traverse(o => {
+    const scan = (root) => root.traverse(o => {
       if (o.geometry) {
         o.geometry.computeBoundingBox();
-        if (o.geometry.boundingBox && !o.geometry.boundingBox.isEmpty()) {
-          const b = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+        const bb = o.geometry.boundingBox;
+        if (bb && !bb.isEmpty() && isFinite(bb.min.x) && isFinite(bb.max.x)) {
+          const b = bb.clone().applyMatrix4(o.matrixWorld);
           box.union(b); has = true;
         }
       }
     });
+    if (this.modelGroup.visible) scan(this.modelGroup);
+    if (this.docVisible) scan(this.docGroup);
     if (!has) return;
     const c = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length() || 10;
